@@ -21,7 +21,7 @@ The system enables proximity-based scoring and explainable neighborhood recommen
 
 This diagram shows the end-to-end application architecture including the client UI, backend APIs, multi-agent layer, and scoring engine.
 
-![System Architecture](./docs/system architecture diagram.png)
+![System Architecture](./docs/system_architecture_diagram.png)
 
 ### Key Components
 
@@ -41,7 +41,7 @@ This diagram shows the end-to-end application architecture including the client 
 
 This diagram shows the full data pipeline from ingestion to transformation and marts.
 
-![Data Pipeline Architecture](./docs/Data Architecture Diagram.png)
+![Data Pipeline Architecture](./docs/Data_Architecture_Diagram.png)
 
 ### Pipeline Flow
 
