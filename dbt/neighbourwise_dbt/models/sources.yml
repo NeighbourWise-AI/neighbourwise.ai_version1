@@ -1,0 +1,28 @@
+version: 2
+
+sources:
+  - name: stage
+    database: NEIGHBOURWISE_DOMAINS
+    schema: STAGE
+    tables:
+      - name: stg_boston_crime
+        description: "Boston crime incident reports from API"
+        
+      - name: stg_boston_mbta_routes
+        description: "MBTA transit routes"
+        
+      - name: stg_boston_mbta_stops
+        description: "MBTA transit stops"
+        
+      - name: stg_boston_bluebikes_stations
+        description: "Blue Bikes stations"
+        
+      - name: stg_boston_schools
+        description: "Massachusetts schools (Pre-K through High School)"
+  
+  - name: intermediate
+    database: NEIGHBOURWISE_DOMAINS
+    schema: INTERMEDIATE
+    tables:
+      - name: int_boston_mbta_mapping
+        description: "MBTA route-stop relationships with direction and sequence"
