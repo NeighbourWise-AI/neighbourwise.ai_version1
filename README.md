@@ -17,9 +17,36 @@ Healthcare
 
 The system enables proximity-based scoring and explainable neighborhood recommendations.
 
-**🏗️ Architecture**
+## 🧠 System Architecture (GenAI Application Layer)
 
-Data Sources → Airflow (Docker) → AWS S3 → Snowflake (STAGE) → dbt (INTERMEDIATE/MARTS)
+This diagram shows the end-to-end application architecture including the client UI, backend APIs, multi-agent layer, and scoring engine.
+
+![System Architecture](./docs/system architecture diagram.png)
+
+### Key Components
+
+- **Client Layer** → Streamlit UI for user interaction  
+- **Backend Layer** → FastAPI services  
+- **Multi-Agent Layer**
+  - RAG Search
+  - Snowflake Query Agent
+  - Web Search
+  - Image Generator
+- **Neighborhood Score Generator**
+- **Final Proposal Report Generator**
+
+---
+
+## 🏗️ Data Engineering Architecture
+
+This diagram shows the full data pipeline from ingestion to transformation and marts.
+
+![Data Pipeline Architecture](./docs/Data Architecture Diagram.png)
+
+### Pipeline Flow
+
+Data Sources → Airflow → AWS S3 → Snowflake Stage → dbt Transformations → Intermediate → Marts  
+
 
 **⚙️ Tech Stack**
 
@@ -53,3 +80,5 @@ Healthcare: 3435 records
 **🎯 Goal**
 
 To build a scalable, explainable, multi-domain data platform that powers intelligent, personalized neighborhood recommendations.
+
+
