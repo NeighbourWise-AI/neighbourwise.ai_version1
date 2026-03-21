@@ -10,6 +10,10 @@ WITH source AS (
     SELECT * FROM {{ source('stage', 'stg_boston_crime') }}
 )
 
+, district_mapping AS (
+    SELECT * FROM {{ source('stage', 'stg_district_mapping') }}
+)
+
 , deduplicated AS (
     SELECT
             *,
@@ -29,15 +33,19 @@ WITH source AS (
         , CAST(OFFENSE_CODE AS INTEGER) AS offense_code
         , COALESCE(NULLIF(TRIM(UPPER(OFFENSE_DESCRIPTION)), ''),
                  'UNKNOWN') AS offense_description
+        -- District code validated against known BPD districts
         , COALESCE(
             CASE
-                WHEN UPPER(TRIM(DISTRICT)) IN (
+                WHEN UPPER(TRIM(deduplicated.DISTRICT)) IN (
                     'A1','A7','B2','B3','C6','C11','D4','D14','E5','E13','E18'
-                ) THEN UPPER(TRIM(DISTRICT))
+                ) THEN UPPER(TRIM(deduplicated.DISTRICT))
                 ELSE NULL
             END,
             'UNKNOWN'
         ) AS district
+        -- District name: joined from STG_DISTRICT_MAPPING
+        -- Precise neighborhood resolution requires spatial join via MASTER_LOCATION using LAT/LONG
+        , COALESCE(dm.DISTRICT_NAME, 'UNKNOWN') AS district_name
         , COALESCE(NULLIF(TRIM(UPPER(REPORTING_AREA)), ''), 'UNKNOWN') AS reporting_area
         , COALESCE(NULLIF(TRIM(UPPER(STREET)), ''), 'UNKNOWN') AS street
         , COALESCE(
@@ -153,9 +161,11 @@ WITH source AS (
             ELSE FALSE
         END AS is_drug_related
         , TO_CHAR(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS') AS load_timestamp
-    
+
     FROM deduplicated
-    WHERE row_num =1
+    LEFT JOIN district_mapping dm
+        ON UPPER(TRIM(deduplicated.DISTRICT)) = UPPER(TRIM(dm.DISTRICT_CODE))
+    WHERE row_num = 1
 )
 
 SELECT *
