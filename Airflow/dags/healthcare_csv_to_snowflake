@@ -1,0 +1,28 @@
+
+# dags/healthcare/healthcare_csv_s3_to_snowflake_dag.py
+
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.providers.standard.operators.python import PythonOperator
+
+from healthcare.get_latest_csv_key import get_latest_csv_key
+from healthcare.create_sf_table import create_snowflake_healthcare_table
+from healthcare.copy_into_sf import copy_latest_csv_into_snowflake
+
+default_args = {"owner": "team", "retries": 1, "retry_delay": timedelta(minutes=2)}
+
+with DAG(
+    dag_id="healthcare_csv_s3_to_snowflake",
+    default_args=default_args,
+    start_date=datetime(2026, 2, 19),
+    schedule=None,
+    catchup=False,
+    tags=["healthcare", "s3", "snowflake", "csv"],
+) as dag:
+
+    t1 = PythonOperator(task_id="get_latest_csv_key", python_callable=get_latest_csv_key)
+    t2 = PythonOperator(task_id="create_snowflake_healthcare_table", python_callable=create_snowflake_healthcare_table)
+    t3 = PythonOperator(task_id="copy_latest_csv_into_snowflake", python_callable=copy_latest_csv_into_snowflake)
+
+    t1 >> t2 >> t3
+    
