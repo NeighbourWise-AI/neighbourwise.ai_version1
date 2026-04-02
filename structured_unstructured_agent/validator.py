@@ -123,7 +123,7 @@ def check_format(answer):
         issues.append("Missing Summary section")
     if "|" not in answer:
         issues.append("Missing data table")
-    if "### recommendation" not in lower and "**recommendation" not in lower and "recommendation" not in lower and "### insight" not in lower and "**insight" not in lower and "insight" not in lower:
+    if "### insight" not in lower and "**insight" not in lower and "insight" not in lower:
         issues.append("Missing Insights section")
     return {"status": PASS if not issues else WARN, "issues": issues}
 
@@ -162,7 +162,7 @@ DRAFT: {draft[:2000]}
 ISSUES: {issues}
 DATA: {context[:3000]}
 
-Write an improved answer with ### Summary (3-4 sentences, conversational, Title Case neighborhoods), ### Key Data (markdown table, Yes/No booleans, formatted numbers), ### Insights (2-3 analytical observations — patterns, disparities, what the data means for residents, how this compares to Boston overall).
+Write an improved answer with ### Summary (3-4 sentences, conversational, Title Case neighborhoods), ### Key Data (markdown table, Yes/No booleans, formatted numbers), ### Recommendations (2-3 specific actionable suggestions referencing actual data).
 
 Improved answer:"""
     return claude_complete(cur, prompt)
