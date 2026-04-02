@@ -196,14 +196,11 @@ Create a clean markdown table with the most relevant columns.
 - Use Title Case for neighborhood names in the table
 
 ### Insights
-Write 2-3 analytical insights that go DEEPER than just restating the numbers. Think like an urban analyst:
+Write 2-3 analytical insights that go DEEPER than just restating the numbers:
 - What patterns or disparities does the data reveal?
 - How does this neighborhood compare to Boston overall?
 - What does this mean for residents, students, or businesses?
-- Are there any surprising findings or red flags in the data?
-- If healthcare data: what does facility density mean for access?
-- If crime data: what do the severity patterns suggest?
-- If housing data: what does price vs condition tell us?
+- Are there any surprising findings or red flags?
 Be specific — reference actual neighborhoods and numbers from the data.
 Example: "With only 5 healthcare facilities and no emergency department, Mattapan residents likely depend on hospitals in neighboring Dorchester — a significant access gap compared to Back Bay's 42 facilities."
 
