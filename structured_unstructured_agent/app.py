@@ -1,12 +1,12 @@
 """
-NeighbourWise AI — Streamlit App (Final Version)
-══════════════════════════════════════════════════
-Three-agent system:
-  Agent 1: SQL Agent      → Cortex mistral-large2 → structured data
-  Agent 2: RAG Agent      → Cortex e5-base-v2     → unstructured data
-  Agent 3: Validator Agent → Cortex claude-3-5-sonnet → imported from neighbourwise_validator.py
+NeighbourWise AI — Optimized Streamlit App
+═══════════════════════════════════════════
+OPTIMIZED: 3 LLM calls max per question (was 5-6)
+  Call 1: SQL generation (Mistral)
+  Call 2: Synthesis (Mistral) — combines SQL + RAG into rich answer
+  Call 3: Validator (Claude) — ONLY if issues found
 
-Flow: Question → Classify → SQL/RAG agents → Draft → Validator (Claude) → Final Answer
+Flow: Question → SQL agent + RAG agent (parallel-ready) → Synthesize → Validate if needed → Answer
 """
 
 import streamlit as st
@@ -17,9 +17,6 @@ import snowflake.connector
 from dotenv import load_dotenv
 from pathlib import Path
 
-# ═══════════════════════════════════════════════════════════════
-# IMPORT VALIDATOR AGENT (uses Claude via Cortex)
-# ═══════════════════════════════════════════════════════════════
 from neighbourwise_validator import validate_and_improve
 
 load_dotenv()
@@ -42,10 +39,6 @@ SNOWFLAKE_CONFIG = {
 
 LLM_MODEL = "mistral-large2"
 
-
-# ═══════════════════════════════════════════════════════════════
-# SNOWFLAKE CONNECTION
-# ═══════════════════════════════════════════════════════════════
 
 @st.cache_resource
 def get_connection():
@@ -73,7 +66,7 @@ def cortex_complete(prompt):
     conn = get_connection()
     cur = conn.cursor()
     try:
-        safe = prompt.replace("'", "''")[:8000]
+        safe = prompt.replace("'", "''")[:12000]
         cur.execute(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{LLM_MODEL}', '{safe}')")
         return cur.fetchone()[0]
     except Exception as e:
@@ -83,41 +76,39 @@ def cortex_complete(prompt):
 
 
 # ═══════════════════════════════════════════════════════════════
-# AGENT 1: SQL AGENT (Cortex Mistral)
+# AGENT 1: SQL AGENT (Mistral — 1 LLM call)
 # ═══════════════════════════════════════════════════════════════
 
 def sql_agent(question):
-    prompt = f"""You are a SQL expert for the NeighbourWise Boston neighborhood database.
+    prompt = f"""You are a SQL expert for NeighbourWise Boston neighborhood database.
 
-CRITICAL RULES:
-1. ALWAYS use full table path: NEIGHBOURWISE_DOMAINS.MARTS.<table_name>
-2. NEIGHBORHOOD_NAME values are ALWAYS UPPERCASE (e.g. 'DORCHESTER', 'BACK BAY', 'FENWAY')
-3. When comparing neighborhoods across domains, JOIN tables using LOCATION_ID
-4. Generate ONLY the SQL query. No explanation, no markdown, no backticks.
+RULES:
+1. ALWAYS use NEIGHBOURWISE_DOMAINS.MARTS.<table>
+2. NEIGHBORHOOD_NAME is ALWAYS UPPERCASE (e.g. 'DORCHESTER', 'BACK BAY')
+3. For cross-domain comparisons, JOIN tables via LOCATION_ID
+4. Output ONLY SQL. No text, no markdown, no backticks.
 
-Neighborhood tables (LOCATION_ID, NEIGHBORHOOD_NAME, CITY, _GRADE, _SCORE):
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_HEALTHCARE: TOTAL_FACILITIES, HOSPITAL_COUNT, CLINIC_COUNT, TOTAL_BED_CAPACITY, HEALTHCARE_GRADE, HEALTHCARE_SCORE
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_SAFETY: TOTAL_INCIDENTS, VIOLENT_CRIME_COUNT, PCT_VIOLENT, SAFETY_GRADE, SAFETY_SCORE, MOST_COMMON_OFFENSE
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_HOUSING: TOTAL_PROPERTIES, AVG_ASSESSED_VALUE, AVG_ESTIMATED_RENT, AVG_PRICE_PER_SQFT, HOUSING_GRADE, HOUSING_SCORE
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_MBTA: TOTAL_STOPS, TOTAL_ROUTES, HAS_RAPID_TRANSIT, TRANSIT_GRADE, TRANSIT_SCORE
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_RESTAURANTS: TOTAL_RESTAURANTS, AVG_RATING, CUISINE_DIVERSITY, RESTAURANT_GRADE, RESTAURANT_SCORE
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_SCHOOLS: TOTAL_SCHOOLS, PUBLIC_SCHOOL_COUNT, SCHOOL_GRADE, SCHOOL_SCORE
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_BLUEBIKES: TOTAL_STATIONS, TOTAL_DOCKS, BIKESHARE_GRADE, BIKESHARE_SCORE
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_GROCERY_STORES: TOTAL_STORES, SUPERMARKET_COUNT, GROCERY_GRADE, GROCERY_SCORE
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_UNIVERSITIES: TOTAL_UNIVERSITIES, EDUCATION_GRADE, EDUCATION_SCORE, UNIVERSITY_NAMES
+TABLES:
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_HEALTHCARE (NEIGHBORHOOD_NAME, TOTAL_FACILITIES, HOSPITAL_COUNT, CLINIC_COUNT, TOTAL_BED_CAPACITY, HEALTHCARE_GRADE, HEALTHCARE_SCORE, LOCATION_ID)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_SAFETY (NEIGHBORHOOD_NAME, TOTAL_INCIDENTS, VIOLENT_CRIME_COUNT, PCT_VIOLENT, SAFETY_GRADE, SAFETY_SCORE, MOST_COMMON_OFFENSE, LOCATION_ID)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_HOUSING (NEIGHBORHOOD_NAME, TOTAL_PROPERTIES, AVG_ASSESSED_VALUE, AVG_ESTIMATED_RENT, AVG_PRICE_PER_SQFT, HOUSING_GRADE, HOUSING_SCORE, LOCATION_ID)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_MBTA (NEIGHBORHOOD_NAME, TOTAL_STOPS, HAS_RAPID_TRANSIT, TRANSIT_GRADE, TRANSIT_SCORE, LOCATION_ID)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_RESTAURANTS (NEIGHBORHOOD_NAME, TOTAL_RESTAURANTS, AVG_RATING, CUISINE_DIVERSITY, RESTAURANT_GRADE, RESTAURANT_SCORE, LOCATION_ID)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_SCHOOLS (NEIGHBORHOOD_NAME, TOTAL_SCHOOLS, PUBLIC_SCHOOL_COUNT, SCHOOL_GRADE, SCHOOL_SCORE, LOCATION_ID)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_BLUEBIKES (NEIGHBORHOOD_NAME, TOTAL_STATIONS, TOTAL_DOCKS, BIKESHARE_GRADE, BIKESHARE_SCORE, LOCATION_ID)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_GROCERY_STORES (NEIGHBORHOOD_NAME, TOTAL_STORES, SUPERMARKET_COUNT, GROCERY_GRADE, GROCERY_SCORE, LOCATION_ID)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_UNIVERSITIES (NEIGHBORHOOD_NAME, TOTAL_UNIVERSITIES, EDUCATION_GRADE, EDUCATION_SCORE, UNIVERSITY_NAMES, LOCATION_ID)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_HEALTHCARE (FACILITY_NAME, FACILITY_TYPE, NEIGHBORHOOD_NAME, BED_COUNT, IS_HOSPITAL, IS_CLINIC)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_RESTAURANTS (RESTAURANT_NAME, CUISINE_CATEGORY, NEIGHBORHOOD_NAME, RATING, REVIEW_COUNT, PRICE_LABEL)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_UNIVERSITIES (COLLEGE_NAME, INSTITUTION_TYPE, NEIGHBORHOOD_NAME, HAS_CAMPUS_HOUSING, LARGEST_PROGRAM)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_CRIME (OFFENSE_DESCRIPTION, NEIGHBORHOOD_NAME, CRIME_SEVERITY_LABEL, IS_VIOLENT_CRIME)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_HOUSING (BUILDING_TYPE, NEIGHBORHOOD_NAME, TOTAL_ASSESSED_VALUE, ESTIMATED_RENT, BEDROOMS)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_MBTA_STOPS (STOP_NAME, NEIGHBORHOOD_NAME, SERVES_HEAVY_RAIL, IS_WHEELCHAIR_ACCESSIBLE)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_SCHOOLS (SCHOOL_NAME, SCHOOL_TYPE_DESC, NEIGHBORHOOD_NAME, IS_PUBLIC)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_BLUEBIKE_STATIONS (STATION_NAME, NEIGHBORHOOD_NAME, TOTAL_DOCKS, CAPACITY_TIER)
+NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_GROCERY_STORES (STORE_NAME, STORE_TYPE, NEIGHBORHOOD_NAME)
 
-Facility tables:
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_HEALTHCARE: FACILITY_NAME, FACILITY_TYPE, NEIGHBORHOOD_NAME, BED_COUNT, IS_HOSPITAL, IS_CLINIC, LOCATION_ID
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_RESTAURANTS: RESTAURANT_NAME, CUISINE_CATEGORY, NEIGHBORHOOD_NAME, RATING, REVIEW_COUNT, PRICE_LABEL, LOCATION_ID
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_UNIVERSITIES: COLLEGE_NAME, INSTITUTION_TYPE, NEIGHBORHOOD_NAME, HAS_CAMPUS_HOUSING, LARGEST_PROGRAM, LOCATION_ID
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_CRIME: OFFENSE_DESCRIPTION, NEIGHBORHOOD_NAME, CRIME_SEVERITY_LABEL, IS_VIOLENT_CRIME, LOCATION_ID
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_HOUSING: BUILDING_TYPE, NEIGHBORHOOD_NAME, TOTAL_ASSESSED_VALUE, ESTIMATED_RENT, BEDROOMS, LOCATION_ID
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_MBTA_STOPS: STOP_NAME, NEIGHBORHOOD_NAME, SERVES_HEAVY_RAIL, IS_WHEELCHAIR_ACCESSIBLE, LOCATION_ID
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_SCHOOLS: SCHOOL_NAME, SCHOOL_TYPE_DESC, NEIGHBORHOOD_NAME, IS_PUBLIC, LOCATION_ID
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_BLUEBIKE_STATIONS: STATION_NAME, NEIGHBORHOOD_NAME, TOTAL_DOCKS, CAPACITY_TIER, LOCATION_ID
-- NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_GROCERY_STORES: STORE_NAME, STORE_TYPE, NEIGHBORHOOD_NAME, LOCATION_ID
-
-Example cross-domain JOIN:
+EXAMPLE JOIN:
 SELECT h.NEIGHBORHOOD_NAME, h.HEALTHCARE_GRADE, s.SAFETY_GRADE, ho.HOUSING_GRADE
 FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_HEALTHCARE h
 JOIN NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_SAFETY s ON h.LOCATION_ID = s.LOCATION_ID
@@ -128,138 +119,125 @@ Question: {question}
 SQL:"""
 
     sql_text = cortex_complete(prompt).strip().replace("```sql", "").replace("```", "").strip()
-
     if not sql_text or sql_text.startswith("Error"):
-        return {"source": "sql_agent", "sql": None, "results": None, "error": sql_text}
-
+        return {"sql": None, "results": None, "error": sql_text}
     results = run_sql(sql_text)
     if isinstance(results, dict) and "error" in results:
-        return {"source": "sql_agent", "sql": sql_text, "results": None, "error": results["error"]}
-
-    return {"source": "sql_agent", "sql": sql_text, "results": results}
+        return {"sql": sql_text, "results": None, "error": results["error"]}
+    return {"sql": sql_text, "results": results}
 
 
 # ═══════════════════════════════════════════════════════════════
-# AGENT 2: RAG AGENT (Cortex e5-base-v2 embeddings)
+# AGENT 2: RAG AGENT (no LLM call — just vector search)
 # ═══════════════════════════════════════════════════════════════
 
-def rag_agent(question, domain_filter=None, top_k=5):
+def rag_agent(question, domain_filter=None):
     conn = get_connection()
     cur = conn.cursor()
     try:
         safe_q = question.replace("'", "''")[:2000]
-        prefixed_q = f"query: {safe_q}"
         domain_clause = f"AND domain = '{domain_filter}'" if domain_filter and domain_filter != "ALL" else ""
-
         sql = f"""
             SELECT chunk_text, domain, source_file,
-                VECTOR_COSINE_SIMILARITY(
-                    chunk_embedding,
-                    SNOWFLAKE.CORTEX.EMBED_TEXT_768('e5-base-v2', '{prefixed_q}')
+                VECTOR_COSINE_SIMILARITY(chunk_embedding,
+                    SNOWFLAKE.CORTEX.EMBED_TEXT_768('e5-base-v2', 'query: {safe_q}')
                 ) AS similarity
             FROM NEIGHBOURWISE_DOMAINS.RAW_UNSTRUCTURED.RAW_DOMAIN_CHUNKS
             WHERE 1=1 {domain_clause}
-            ORDER BY similarity DESC LIMIT {top_k}
+            ORDER BY similarity DESC LIMIT 3
         """
         cur.execute(sql)
         cols = [c[0] for c in cur.description]
         rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-        return {"source": "rag_agent", "chunks": rows, "query": question}
+        return {"chunks": rows}
     except Exception as e:
-        return {"source": "rag_agent", "chunks": [], "error": str(e)}
+        return {"chunks": [], "error": str(e)}
     finally:
         cur.close()
 
 
 # ═══════════════════════════════════════════════════════════════
-# CLASSIFIER (Cortex Mistral)
-# ═══════════════════════════════════════════════════════════════
-
-def classify_question(question):
-    prompt = f"""Classify this question about Boston neighborhoods into ONE category:
-SQL — needs numbers, counts, rankings, grades, data lookups
-RAG — needs explanations, context, policies, reports, qualitative info
-BOTH — needs numbers AND context together
-Question: {question}
-Reply with ONLY one word: SQL or RAG or BOTH"""
-
-    result = cortex_complete(prompt).strip().upper()
-    if "BOTH" in result:
-        return "BOTH"
-    elif "RAG" in result:
-        return "RAG"
-    elif "SQL" in result:
-        return "SQL"
-    return "BOTH"
-
-
-# ═══════════════════════════════════════════════════════════════
-# SYNTHESIZER — draft answer (Cortex Mistral)
+# SYNTHESIZER — rich detailed answer (1 LLM call)
 # ═══════════════════════════════════════════════════════════════
 
 def synthesize_answer(question, sql_data, rag_data):
     parts = []
     if sql_data and isinstance(sql_data.get("results"), list) and sql_data["results"]:
-        parts.append(f"STRUCTURED DATA:\n{json.dumps(sql_data['results'][:20], indent=2, default=str)}")
+        parts.append(f"DATABASE RESULTS:\n{json.dumps(sql_data['results'][:15], indent=2, default=str)}")
     if rag_data and rag_data.get("chunks"):
         chunks = "\n\n".join([
-            f"[{c.get('DOMAIN', c.get('domain', '?'))}] {c.get('CHUNK_TEXT', c.get('chunk_text', ''))[:500]}"
-            for c in rag_data["chunks"][:5]
+            f"[{c.get('DOMAIN', c.get('domain', '?'))}] {c.get('CHUNK_TEXT', c.get('chunk_text', ''))[:600]}"
+            for c in rag_data["chunks"][:3]
         ])
-        parts.append(f"DOCUMENT CONTEXT:\n{chunks}")
+        parts.append(f"DOCUMENT INSIGHTS:\n{chunks}")
 
     if not parts:
-        return "I couldn't find relevant information to answer your question. Try being more specific about a Boston neighborhood or domain."
+        return "I couldn't find relevant information. Try being more specific about a Boston neighborhood or domain."
 
     context = "\n\n".join(parts)
-    prompt = f"""You are NeighbourWise AI, a Boston neighborhood analyst.
 
-Your answer MUST have exactly THREE sections:
+    prompt = f"""You are NeighbourWise AI, an expert Boston neighborhood analyst. Write a detailed, insightful answer.
+
+FORMAT — your answer MUST have these THREE sections:
+
 ### Summary
-2-3 conversational sentences. Lead with the key insight. Convert UPPERCASE neighborhoods to Title Case.
-### Key Data
-Clean markdown table. Booleans as Yes/No. Numbers formatted nicely. No IDs or timestamps.
-### Recommendations
-2-3 specific, actionable suggestions based on the data.
+Write 3-4 conversational sentences that tell a story. Lead with the most interesting finding.
+Convert UPPERCASE neighborhood names to Title Case (DORCHESTER → Dorchester).
+Weave numbers naturally: "Dorchester has 5 hospitals" not "HOSPITAL_COUNT: 5".
+If comparing neighborhoods, highlight the biggest contrast.
+If the data reveals a disparity or trend, call it out.
 
-CONTEXT DATA:
+### Key Data
+Create a clean markdown table with the most relevant columns.
+- Convert booleans: TRUE → Yes, FALSE → No
+- Format numbers: 1234 → 1,234 and 45.678 → 45.7
+- No IDs, timestamps, or load dates
+- Include ALL rows from the data (up to 15)
+- Use Title Case for neighborhood names in the table
+
+### Insights
+Write 2-3 analytical insights that go DEEPER than just restating the numbers. Think like an urban analyst:
+- What patterns or disparities does the data reveal?
+- How does this neighborhood compare to Boston overall?
+- What does this mean for residents, students, or businesses?
+- Are there any surprising findings or red flags in the data?
+- If healthcare data: what does facility density mean for access?
+- If crime data: what do the severity patterns suggest?
+- If housing data: what does price vs condition tell us?
+Be specific — reference actual neighborhoods and numbers from the data.
+Example: "With only 5 healthcare facilities and no emergency department, Mattapan residents likely depend on hospitals in neighboring Dorchester — a significant access gap compared to Back Bay's 42 facilities."
+
+DATA:
 {context}
 
 QUESTION: {question}
 
-Answer:"""
+Write your detailed answer now:"""
+
     return cortex_complete(prompt)
 
 
 # ═══════════════════════════════════════════════════════════════
-# ORCHESTRATOR: Classify → Agents → Draft → VALIDATOR → Answer
+# ORCHESTRATOR — OPTIMIZED: skip classification, always run both
 # ═══════════════════════════════════════════════════════════════
 
 def ask_neighbourwise(question, domain_filter=None):
     """
-    Full pipeline:
-    1. Classify question (Mistral)
-    2. Run SQL and/or RAG agents (Mistral + e5)
-    3. Generate draft answer (Mistral)
-    4. Call Validator Agent (Claude) — imported from neighbourwise_validator.py
-    5. Return validated/improved answer
+    Optimized pipeline (3 LLM calls max, was 5-6):
+    1. SQL agent (1 Mistral call) — always runs
+    2. RAG agent (no LLM call) — always runs
+    3. Synthesize (1 Mistral call) — combines both
+    4. Validator (0 or 1 Claude call) — only if issues found
     """
 
-    # Step 1: Classify
-    classification = classify_question(question)
+    # Step 1+2: Run BOTH agents always (no classification call needed)
+    sql_data = sql_agent(question)
+    rag_data = rag_agent(question, domain_filter=domain_filter)
 
-    # Step 2: Run agents
-    sql_data = None
-    rag_data = None
-    if classification in ("SQL", "BOTH"):
-        sql_data = sql_agent(question)
-    if classification in ("RAG", "BOTH"):
-        rag_data = rag_agent(question, domain_filter=domain_filter)
-
-    # Step 3: Generate draft answer (Mistral)
+    # Step 3: Synthesize (1 LLM call)
     draft_answer = synthesize_answer(question, sql_data, rag_data)
 
-    # Step 4: Call Validator Agent (Claude) — the key integration
+    # Step 4: Validator (0 or 1 LLM call — Claude only if issues)
     conn = get_connection()
     cur = conn.cursor()
     try:
@@ -267,15 +245,12 @@ def ask_neighbourwise(question, domain_filter=None):
     finally:
         cur.close()
 
-    # Step 5: Return the validated answer
     return {
-        "answer": validated["answer"],         # Final answer (improved by Claude if needed)
-        "classification": classification,
+        "answer": validated["answer"],
         "sql_data": sql_data,
         "rag_data": rag_data,
-        "validation": validated["feedback"],   # Validation details
-        "improved": validated["improved"],     # Was it improved by Claude?
-        "draft": validated["draft"],           # Original Mistral draft
+        "validation": validated["feedback"],
+        "improved": validated["improved"],
     }
 
 
@@ -284,21 +259,20 @@ def ask_neighbourwise(question, domain_filter=None):
 # ═══════════════════════════════════════════════════════════════
 
 def main():
-    # Sidebar
     with st.sidebar:
         st.title("🏘️ NeighbourWise AI")
         st.caption("Boston Neighborhood Intelligence")
         st.divider()
 
         domain_filter = st.selectbox(
-            "Filter by domain (for document search)",
+            "Filter by domain",
             ["ALL", "HEALTHCARE", "RESTAURANTS", "UNIVERSITIES", "CRIME",
              "HOUSING", "TRANSIT", "BLUEBIKES", "GROCERY", "SCHOOLS", "GENERAL"],
         )
         st.divider()
 
         st.markdown("**Example questions:**")
-        examples = [
+        for q in [
             "How many hospitals are in Dorchester?",
             "Which neighborhood is the safest?",
             "Tell me about healthcare in Roxbury",
@@ -309,8 +283,7 @@ def main():
             "What is Boston doing about food deserts?",
             "Average rent in each neighborhood",
             "Universities in Fenway with campus housing",
-        ]
-        for q in examples:
+        ]:
             if st.button(q, key=f"ex_{q}", use_container_width=True):
                 st.session_state.user_question = q
 
@@ -318,14 +291,12 @@ def main():
         st.caption("Agents: SQL (Mistral) + RAG (e5) + Validator (Claude)")
         st.caption("20 mart tables + 5,702 document chunks")
 
-    # Main area
     st.header("Ask anything about Boston neighborhoods")
-    st.caption("SQL + RAG agents generate a draft → Claude validates and improves → you get the best answer")
+    st.caption("SQL + RAG agents generate a draft → Claude validates → you get the best answer")
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Chat history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -337,7 +308,7 @@ def main():
                     st.dataframe(pd.DataFrame(msg["results"][:50]), use_container_width=True)
             if msg.get("chunks"):
                 with st.expander("📄 Document Sources"):
-                    for i, c in enumerate(msg["chunks"][:5]):
+                    for i, c in enumerate(msg["chunks"][:3]):
                         d = c.get("DOMAIN", c.get("domain", "?"))
                         s = c.get("SOURCE_FILE", c.get("source_file", "?"))
                         t = c.get("CHUNK_TEXT", c.get("chunk_text", ""))[:300]
@@ -345,19 +316,18 @@ def main():
                         st.caption(t + "...")
                         if i < len(msg["chunks"]) - 1:
                             st.divider()
-            if msg.get("validation"):
-                v = msg["validation"]
-                if msg.get("improved"):
-                    with st.expander("🔍 Validator (Claude): Answer was improved"):
-                        for name, data in v["checks"].items():
-                            st.markdown(f"{data['status']} **{name}**")
-                            for issue in data.get("issues", []):
-                                st.caption(f"  → {issue[:150]}")
+            if msg.get("improved") is not None:
+                if msg["improved"]:
+                    with st.expander("🔍 Validator (Claude): Improved"):
+                        if msg.get("validation"):
+                            for n, d in msg["validation"]["checks"].items():
+                                st.markdown(f"{d['status']} **{n}**")
+                                for issue in d.get("issues", []):
+                                    st.caption(f"  → {issue[:150]}")
                 else:
-                    with st.expander("✅ Validator (Claude): Passed all checks"):
+                    with st.expander("✅ Validator (Claude): Passed"):
                         st.caption("No issues found.")
 
-    # Chat input
     user_input = st.chat_input("Ask about any Boston neighborhood...")
 
     if "user_question" in st.session_state:
@@ -370,18 +340,14 @@ def main():
             st.markdown(user_input)
 
         with st.chat_message("assistant"):
-            with st.spinner("🔄 SQL + RAG agents working... then Claude validates..."):
+            with st.spinner("🔄 Querying data + generating answer..."):
                 result = ask_neighbourwise(user_input, domain_filter=domain_filter)
 
             st.markdown(result["answer"])
 
-            # Source badge
-            cls = result["classification"]
-            badge = "📊 SQL" if cls == "SQL" else "📄 RAG" if cls == "RAG" else "📊📄 Hybrid"
-            tag = " → 🔍 Improved by Claude" if result.get("improved") else " → ✅ Passed Claude validation"
-            st.caption(f"{badge}{tag}")
+            tag = "🔍 Improved by Claude" if result.get("improved") else "✅ Passed validation"
+            st.caption(f"📊📄 SQL + RAG → {tag}")
 
-            # SQL details
             sql_query = None
             sql_results = None
             if result.get("sql_data") and result["sql_data"].get("sql"):
@@ -393,12 +359,11 @@ def main():
                     with st.expander("📋 Data Results"):
                         st.dataframe(pd.DataFrame(sql_results[:50]), use_container_width=True)
 
-            # RAG details
             rag_chunks = None
             if result.get("rag_data") and result["rag_data"].get("chunks"):
                 rag_chunks = result["rag_data"]["chunks"]
                 with st.expander("📄 Document Sources"):
-                    for i, c in enumerate(rag_chunks[:5]):
+                    for i, c in enumerate(rag_chunks[:3]):
                         d = c.get("DOMAIN", c.get("domain", "?"))
                         s = c.get("SOURCE_FILE", c.get("source_file", "?"))
                         t = c.get("CHUNK_TEXT", c.get("chunk_text", ""))[:300]
@@ -407,27 +372,22 @@ def main():
                         if i < len(rag_chunks) - 1:
                             st.divider()
 
-            # Validation details
-            if result.get("validation"):
-                v = result["validation"]
-                if result.get("improved"):
-                    with st.expander("🔍 Validator (Claude): Answer was improved"):
-                        for name, data in v["checks"].items():
-                            st.markdown(f"{data['status']} **{name}**")
-                            for issue in data.get("issues", []):
-                                st.caption(f"  → {issue[:150]}")
+            if result.get("improved") is not None:
+                if result["improved"]:
+                    with st.expander("🔍 Validator (Claude): Improved"):
+                        if result.get("validation"):
+                            for n, d in result["validation"]["checks"].items():
+                                st.markdown(f"{d['status']} **{n}**")
+                                for issue in d.get("issues", []):
+                                    st.caption(f"  → {issue[:150]}")
                 else:
-                    with st.expander("✅ Validator (Claude): Passed all checks"):
+                    with st.expander("✅ Validator (Claude): Passed"):
                         st.caption("No issues found.")
 
         st.session_state.messages.append({
-            "role": "assistant",
-            "content": result["answer"],
-            "sql": sql_query,
-            "results": sql_results,
-            "chunks": rag_chunks,
-            "validation": result.get("validation"),
-            "improved": result.get("improved"),
+            "role": "assistant", "content": result["answer"],
+            "sql": sql_query, "results": sql_results, "chunks": rag_chunks,
+            "validation": result.get("validation"), "improved": result.get("improved"),
         })
 
 
