@@ -40,6 +40,7 @@ from flask_cors import CORS
 from neo4j import GraphDatabase
 import snowflake.connector
 import anthropic
+from Graph_validator_agent import validate_and_regenerate
 
 # ── Env ───────────────────────────────────────────────────────────────────────
 # Same _find_env_file walker as neo4j_schema_loader.py
@@ -560,13 +561,41 @@ def query_endpoint():
     except Exception as e:
         log.warning(f"RAG retrieval failed: {e}")
 
-    # 5. Claude synthesis
+    # 5. Claude synthesis (initial draft)
     try:
-        answer = synthesize(user_query, graph_ctx, struct_ctx, rag_chunks)
-        log.info("Synthesis complete")
+        draft = synthesize(user_query, graph_ctx, struct_ctx, rag_chunks)
+        log.info("Initial synthesis complete")
     except Exception as e:
         log.error(f"Synthesis failed: {e}")
         return jsonify({"error": f"Synthesis failed: {e}"}), 500
+
+    # 6. GPT-4o validation + regeneration if needed
+    try:
+        validation = validate_and_regenerate(
+            query      = user_query,
+            draft      = draft,
+            graph_ctx  = graph_ctx,
+            struct_ctx = struct_ctx,
+            rag_chunks = rag_chunks,
+            verbose    = True,
+        )
+        answer       = validation["final_output"]
+        val_verdict  = validation["final_verdict"]
+        regenerated  = validation["regenerated"]
+        val_passed   = validation["passed"]
+        val_attempts = validation["attempts"]
+        log.info(
+            f"Validation complete — passed={val_passed} "
+            f"score={val_verdict.get('score')}/100 "
+            f"regenerated={regenerated} attempts={val_attempts}"
+        )
+    except Exception as e:
+        log.warning(f"Validation step failed (non-fatal): {e} — using raw draft")
+        answer       = draft
+        val_verdict  = {}
+        regenerated  = False
+        val_passed   = None
+        val_attempts = 1
 
     return jsonify({
         "query":        user_query,
@@ -577,6 +606,13 @@ def query_endpoint():
             "graph_nodes":     bool(graph_ctx and "error" not in graph_ctx),
             "structured_mart": bool(struct_ctx),
             "rag_chunks":      len(rag_chunks),
+        },
+        "validation": {
+            "passed":       val_passed,
+            "score":        val_verdict.get("score"),
+            "regenerated":  regenerated,
+            "attempts":     val_attempts,
+            "issues":       val_verdict.get("issues", {}),
         },
     })
 
