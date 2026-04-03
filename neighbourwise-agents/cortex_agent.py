@@ -1,12 +1,21 @@
 """
-NeighbourWise AI — Optimized Streamlit App
-═══════════════════════════════════════════
-OPTIMIZED: 3 LLM calls max per question (was 5-6)
-  Call 1: SQL generation (Mistral)
-  Call 2: Synthesis (Mistral) — combines SQL + RAG into rich answer
-  Call 3: Validator (Claude) — ONLY if issues found
+cortex_agent.py — NeighbourWise AI
+═══════════════════════════════════
+Structured + Unstructured data agent (SQL + RAG chatbot).
+Renamed from structured_unstructured_agent/app.py.
 
-Flow: Question → SQL agent + RAG agent (parallel-ready) → Synthesize → Validate if needed → Answer
+TWO MODES:
+  Standalone Streamlit:  streamlit run cortex_agent.py
+  Via Router:            router_agent.py calls handle_data_query() directly
+                         using the same SQL + RAG + synthesize + validate pipeline.
+                         This file is NOT imported by the router — the router
+                         reimplements the pipeline using shared utilities.
+                         This file is the Streamlit UI entry point only.
+
+Pipeline (3 LLM calls max):
+  Call 1: SQL generation (Mistral)
+  Call 2: Synthesis     (Mistral) — combines SQL + RAG into rich answer
+  Call 3: Validator     (Claude)  — ONLY if programmatic checks fail
 """
 
 import streamlit as st
@@ -17,10 +26,11 @@ import snowflake.connector
 from dotenv import load_dotenv
 from pathlib import Path
 
-from neighbourwise_validator import validate_and_improve
+# ── Universal Validator (replaces neighbourwise_validator) ────────────────────
+from universal_validator import validate_and_improve
 
 load_dotenv()
-load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
 # ═══════════════════════════════════════════════════════════════
 # CONFIG
@@ -29,12 +39,12 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
 st.set_page_config(page_title="NeighbourWise AI", page_icon="🏘️", layout="wide")
 
 SNOWFLAKE_CONFIG = {
-    "account": os.environ.get("SNOWFLAKE_ACCOUNT", ""),
-    "user": os.environ.get("SNOWFLAKE_USER", ""),
-    "password": os.environ.get("SNOWFLAKE_PASSWORD", ""),
+    "account":   os.environ.get("SNOWFLAKE_ACCOUNT", ""),
+    "user":      os.environ.get("SNOWFLAKE_USER", ""),
+    "password":  os.environ.get("SNOWFLAKE_PASSWORD", ""),
     "warehouse": os.environ.get("SNOWFLAKE_WAREHOUSE", "NEIGHBOURWISE_AI"),
-    "database": os.environ.get("SNOWFLAKE_DATABASE", "NEIGHBOURWISE_DOMAINS"),
-    "role": os.environ.get("SNOWFLAKE_ROLE", "TRAINING_ROLE"),
+    "database":  os.environ.get("SNOWFLAKE_DATABASE", "NEIGHBOURWISE_DOMAINS"),
+    "role":      os.environ.get("SNOWFLAKE_ROLE", "TRAINING_ROLE"),
 }
 
 LLM_MODEL = "mistral-large2"
@@ -43,13 +53,16 @@ LLM_MODEL = "mistral-large2"
 @st.cache_resource
 def get_connection():
     return snowflake.connector.connect(
-        **SNOWFLAKE_CONFIG, insecure_mode=True, network_timeout=120, login_timeout=60,
+        **SNOWFLAKE_CONFIG,
+        insecure_mode=True,
+        network_timeout=120,
+        login_timeout=60,
     )
 
 
 def run_sql(query):
     conn = get_connection()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     try:
         cur.execute(query)
         if cur.description:
@@ -64,7 +77,7 @@ def run_sql(query):
 
 def cortex_complete(prompt):
     conn = get_connection()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     try:
         safe = prompt.replace("'", "''")[:12000]
         cur.execute(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{LLM_MODEL}', '{safe}')")
@@ -128,15 +141,19 @@ SQL:"""
 
 
 # ═══════════════════════════════════════════════════════════════
-# AGENT 2: RAG AGENT (no LLM call — just vector search)
+# AGENT 2: RAG AGENT (no LLM call — pure vector search)
 # ═══════════════════════════════════════════════════════════════
 
 def rag_agent(question, domain_filter=None):
     conn = get_connection()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     try:
-        safe_q = question.replace("'", "''")[:2000]
-        domain_clause = f"AND domain = '{domain_filter}'" if domain_filter and domain_filter != "ALL" else ""
+        safe_q        = question.replace("'", "''")[:2000]
+        domain_clause = (
+            f"AND domain = '{domain_filter}'"
+            if domain_filter and domain_filter != "ALL"
+            else ""
+        )
         sql = f"""
             SELECT chunk_text, domain, source_file,
                 VECTOR_COSINE_SIMILARITY(chunk_embedding,
@@ -157,26 +174,32 @@ def rag_agent(question, domain_filter=None):
 
 
 # ═══════════════════════════════════════════════════════════════
-# SYNTHESIZER — rich detailed answer (1 LLM call)
+# SYNTHESIZER (Mistral — 1 LLM call)
 # ═══════════════════════════════════════════════════════════════
 
 def synthesize_answer(question, sql_data, rag_data):
     parts = []
     if sql_data and isinstance(sql_data.get("results"), list) and sql_data["results"]:
-        parts.append(f"DATABASE RESULTS:\n{json.dumps(sql_data['results'][:15], indent=2, default=str)}")
+        parts.append(
+            f"DATABASE RESULTS:\n"
+            f"{json.dumps(sql_data['results'][:15], indent=2, default=str)}"
+        )
     if rag_data and rag_data.get("chunks"):
         chunks = "\n\n".join([
-            f"[{c.get('DOMAIN', c.get('domain', '?'))}] {c.get('CHUNK_TEXT', c.get('chunk_text', ''))[:600]}"
+            f"[{c.get('DOMAIN', c.get('domain', '?'))}] "
+            f"{c.get('CHUNK_TEXT', c.get('chunk_text', ''))[:600]}"
             for c in rag_data["chunks"][:3]
         ])
         parts.append(f"DOCUMENT INSIGHTS:\n{chunks}")
 
     if not parts:
-        return "I couldn't find relevant information. Try being more specific about a Boston neighborhood or domain."
+        return (
+            "I couldn't find relevant information. "
+            "Try being more specific about a Boston neighborhood or domain."
+        )
 
     context = "\n\n".join(parts)
-
-    prompt = f"""You are NeighbourWise AI, an expert Boston neighborhood analyst. Write a detailed, insightful answer.
+    prompt  = f"""You are NeighbourWise AI, an expert Boston neighborhood analyst. Write a detailed, insightful answer.
 
 FORMAT — your answer MUST have these THREE sections:
 
@@ -202,7 +225,6 @@ Write 2-3 analytical insights that go DEEPER than just restating the numbers:
 - What does this mean for residents, students, or businesses?
 - Are there any surprising findings or red flags?
 Be specific — reference actual neighborhoods and numbers from the data.
-Example: "With only 5 healthcare facilities and no emergency department, Mattapan residents likely depend on hospitals in neighboring Dorchester — a significant access gap compared to Back Bay's 42 facilities."
 
 DATA:
 {context}
@@ -215,39 +237,34 @@ Write your detailed answer now:"""
 
 
 # ═══════════════════════════════════════════════════════════════
-# ORCHESTRATOR — OPTIMIZED: skip classification, always run both
+# ORCHESTRATOR
 # ═══════════════════════════════════════════════════════════════
 
 def ask_neighbourwise(question, domain_filter=None):
     """
-    Optimized pipeline (3 LLM calls max, was 5-6):
-    1. SQL agent (1 Mistral call) — always runs
-    2. RAG agent (no LLM call) — always runs
-    3. Synthesize (1 Mistral call) — combines both
-    4. Validator (0 or 1 Claude call) — only if issues found
+    Full pipeline (3 LLM calls max):
+    1. SQL agent    (1 Mistral call)
+    2. RAG agent    (0 LLM calls — vector search only)
+    3. Synthesize   (1 Mistral call)
+    4. Validate     (0 or 1 Claude call — only if checks fail)
     """
-
-    # Step 1+2: Run BOTH agents always (no classification call needed)
-    sql_data = sql_agent(question)
-    rag_data = rag_agent(question, domain_filter=domain_filter)
-
-    # Step 3: Synthesize (1 LLM call)
+    sql_data     = sql_agent(question)
+    rag_data     = rag_agent(question, domain_filter=domain_filter)
     draft_answer = synthesize_answer(question, sql_data, rag_data)
 
-    # Step 4: Validator (0 or 1 LLM call — Claude only if issues)
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        validated = validate_and_improve(cur, question, draft_answer, sql_data, rag_data)
-    finally:
-        cur.close()
+    # ── FIX: pass conn (not cur) to validate_and_improve ─────────────────────
+    # UniversalValidator needs a full connection to call Cortex internally.
+    # get_connection() is cached by @st.cache_resource so no new connection
+    # is opened — it reuses the existing one.
+    conn      = get_connection()
+    validated = validate_and_improve(conn, question, draft_answer, sql_data, rag_data)
 
     return {
-        "answer": validated["answer"],
-        "sql_data": sql_data,
-        "rag_data": rag_data,
+        "answer":     validated["answer"],
+        "sql_data":   sql_data,
+        "rag_data":   rag_data,
         "validation": validated["feedback"],
-        "improved": validated["improved"],
+        "improved":   validated["improved"],
     }
 
 
@@ -286,14 +303,15 @@ def main():
 
         st.divider()
         st.caption("Agents: SQL (Mistral) + RAG (e5) + Validator (Claude)")
-        st.caption("20 mart tables + 5,702 document chunks")
+        st.caption("20 mart tables + ~1,800 document chunks")
 
     st.header("Ask anything about Boston neighborhoods")
-    st.caption("SQL + RAG agents generate a draft → Claude validates → you get the best answer")
+    st.caption("SQL + RAG → Mistral synthesizes → Claude validates → best answer")
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
+    # ── Render chat history ───────────────────────────────────────────────────
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -302,7 +320,10 @@ def main():
                     st.code(msg["sql"], language="sql")
             if msg.get("results"):
                 with st.expander("📋 Data Results"):
-                    st.dataframe(pd.DataFrame(msg["results"][:50]), use_container_width=True)
+                    st.dataframe(
+                        pd.DataFrame(msg["results"][:50]),
+                        use_container_width=True,
+                    )
             if msg.get("chunks"):
                 with st.expander("📄 Document Sources"):
                     for i, c in enumerate(msg["chunks"][:3]):
@@ -325,6 +346,7 @@ def main():
                     with st.expander("✅ Validator (Claude): Passed"):
                         st.caption("No issues found.")
 
+    # ── Chat input ────────────────────────────────────────────────────────────
     user_input = st.chat_input("Ask about any Boston neighborhood...")
 
     if "user_question" in st.session_state:
@@ -342,19 +364,26 @@ def main():
 
             st.markdown(result["answer"])
 
-            tag = "🔍 Improved by Claude" if result.get("improved") else "✅ Passed validation"
+            tag = (
+                "🔍 Improved by Claude"
+                if result.get("improved")
+                else "✅ Passed validation"
+            )
             st.caption(f"📊📄 SQL + RAG → {tag}")
 
-            sql_query = None
+            sql_query   = None
             sql_results = None
             if result.get("sql_data") and result["sql_data"].get("sql"):
-                sql_query = result["sql_data"]["sql"]
+                sql_query   = result["sql_data"]["sql"]
                 sql_results = result["sql_data"].get("results")
                 with st.expander("📊 SQL Query"):
                     st.code(sql_query, language="sql")
                 if sql_results and isinstance(sql_results, list):
                     with st.expander("📋 Data Results"):
-                        st.dataframe(pd.DataFrame(sql_results[:50]), use_container_width=True)
+                        st.dataframe(
+                            pd.DataFrame(sql_results[:50]),
+                            use_container_width=True,
+                        )
 
             rag_chunks = None
             if result.get("rag_data") and result["rag_data"].get("chunks"):
@@ -382,9 +411,13 @@ def main():
                         st.caption("No issues found.")
 
         st.session_state.messages.append({
-            "role": "assistant", "content": result["answer"],
-            "sql": sql_query, "results": sql_results, "chunks": rag_chunks,
-            "validation": result.get("validation"), "improved": result.get("improved"),
+            "role":       "assistant",
+            "content":    result["answer"],
+            "sql":        sql_query,
+            "results":    sql_results,
+            "chunks":     rag_chunks,
+            "validation": result.get("validation"),
+            "improved":   result.get("improved"),
         })
 
 
