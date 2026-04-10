@@ -5,7 +5,8 @@ for each agent type without redundancy.
 
 Validation model: claude-sonnet-4-6 via Snowflake Cortex
 Generation model: mistral-large2 via Snowflake Cortex
-Web Search validation: GPT-4o (cross-model, Claude generates, GPT-4o validates)
+Web Search validation:  GPT-4o (cross-model, Claude generates, GPT-4o validates)
+Graph Query validation: GPT-4o (cross-model, Claude generates, GPT-4o validates)
 
 Cross-model validation rule:
   - Mistral generates  → Claude validates
@@ -18,11 +19,29 @@ Agent types:
   "report"         — Full PDF report (3-checkpoint validation)
   "data_query"     — SQL + RAG chatbot answer
   "web_search"     — Serper + Claude draft answer
+  "graph_query"    — Neo4j + Snowflake mart + RAG multi-source answer
+
+Graph validator internals (ported from Graph_validator_agent.py — now SUPERSEDED):
+  _build_graph_validation_context() — formats Neo4j / mart / RAG for GPT-4o
+  _gpt4o_validate_graph()           — full VALIDATOR_SYSTEM_PROMPT with CRITICAL
+                                      SCOPING RULE, regeneration_prompt field,
+                                      4000/2000/400 char limits
+  _improve() GRAPH_QUERY branch     — MAX_RETRIES=2 loop, RateLimitError handling,
+                                      per-category fix blocks, Cortex fallback
 
 Usage:
     from universal_validator import UniversalValidator, AgentType
     validator = UniversalValidator(conn)
     result = validator.validate(AgentType.DATA_QUERY, context)
+
+    # Graph agent (conn=None is safe — graph path uses GPT-4o + Anthropic directly)
+    from universal_validator import validate_graph_output
+    result = validate_graph_output(query, answer, graph_ctx, struct_ctx, rag_chunks)
+
+Supersedes:
+    Graph_validator_agent.py  — all logic ported into _validate_graph_query(),
+                                _gpt4o_validate_graph(), _build_graph_validation_context(),
+                                _improve() GRAPH_QUERY branch, and validate_graph_output()
 """
 
 from __future__ import annotations
@@ -56,6 +75,7 @@ class AgentType(str, Enum):
     REPORT        = "report"
     DATA_QUERY    = "data_query"
     WEB_SEARCH    = "web_search"
+    GRAPH_QUERY   = "graph_query"
 
 
 # ── Result dataclasses ────────────────────────────────────────────────────────
@@ -162,6 +182,8 @@ class UniversalValidator:
                          chart_paths, pdf_path, executive_summary}
         data_query:     {question, answer, sql_data, rag_data}
         web_search:     {query, domain, draft, search_context}
+        graph_query:    {query, answer, graph_ctx, struct_ctx, rag_chunks,
+                         neighborhood, domains}
         """
         checks = {}
 
@@ -175,6 +197,8 @@ class UniversalValidator:
             checks = self._validate_data_query(context)
         elif agent_type == AgentType.WEB_SEARCH:
             checks = self._validate_web_search(context)
+        elif agent_type == AgentType.GRAPH_QUERY:
+            checks = self._validate_graph_query(context)
 
         all_issues        = [i for c in checks.values() for i in c.issues]
         needs_improvement = any(c.status == FAIL for c in checks.values())
@@ -317,6 +341,281 @@ class UniversalValidator:
                   f"RAG={len(rag_chunks)} chunks) — skipping hallucination check")
 
         return checks
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # GRAPH QUERY CHECKS  (GPT-4o validates Claude synthesis against graph data)
+    # Cross-model rule: Claude generates → GPT-4o validates
+    # ══════════════════════════════════════════════════════════════════════════
+    def _validate_graph_query(self, ctx: dict) -> dict[str, CheckResult]:
+        """
+        Validates the graph agent's Claude-generated answer against the
+        Neo4j graph context, Snowflake mart data, and RAG chunks that
+        were used to produce it.
+
+        ctx keys:
+            query       : original user query
+            answer      : Claude's synthesised answer
+            graph_ctx   : Neo4j context dict (profile, top_by_domain, etc.)
+            struct_ctx  : Snowflake mart dict (housing, safety details)
+            rag_chunks  : list of RAG chunk dicts
+            neighborhood: neighborhood name (may be None)
+            domains     : list of detected domain strings
+        """
+        checks      = {}
+        answer      = ctx.get("answer", "")
+        graph_ctx   = ctx.get("graph_ctx", {})
+        struct_ctx  = ctx.get("struct_ctx", {})
+        rag_chunks  = ctx.get("rag_chunks", [])
+        query       = ctx.get("query", "")
+
+        # ── 1. Basic answer quality check (programmatic — no LLM cost) ────────
+        checks["answer_quality"] = self._check_graph_answer_quality(answer)
+
+        # ── 2. GPT-4o cross-model validation against graph data ───────────────
+        gpt4o = _get_openai()
+        if gpt4o and os.environ.get("OPENAI_API_KEY"):
+            checks["gpt4o_graph_validation"] = self._gpt4o_validate_graph(
+                query, answer, graph_ctx, struct_ctx, rag_chunks, gpt4o
+            )
+        else:
+            # Fallback: use Claude via Cortex if GPT-4o unavailable
+            print("[Validator] No OPENAI_API_KEY — falling back to Claude for graph validation")
+            checks["claude_graph_validation"] = self._claude_validate_graph(
+                query, answer, graph_ctx, struct_ctx
+            )
+
+        return checks
+
+    def _check_graph_answer_quality(self, answer: str) -> CheckResult:
+        """Fast programmatic checks on the graph answer — no LLM needed."""
+        issues = []
+
+        if not answer or len(answer.strip()) < 100:
+            return CheckResult(status=FAIL, issues=["Graph answer is empty or too short"])
+
+        lower = answer.lower()
+
+        # Must contain at least one numeric score reference
+        import re as _re
+        if not _re.search(r'\d+\.?\d*\s*/\s*100|\bscore\b.*\d+|\d+\s*(?:out of|/)\s*100', lower):
+            issues.append("Answer contains no numeric score reference — may lack grounding")
+
+        # Must not claim data it couldn't have
+        bad_phrases = ["according to google", "based on web", "i found online",
+                       "internet search", "web results"]
+        for phrase in bad_phrases:
+            if phrase in lower:
+                issues.append(f"Answer references web/external data: '{phrase}'")
+
+        return CheckResult(status=WARN if issues else PASS, issues=issues)
+
+    def _build_graph_validation_context(
+        self,
+        graph_ctx: dict,
+        struct_ctx: dict,
+        rag_chunks: list,
+    ) -> str:
+        """
+        Format Neo4j graph context, Snowflake mart data, and RAG chunks into
+        a readable ground-truth block for GPT-4o graph validation.
+        Ported from Graph_validator_agent.py — uses larger truncation limits
+        (4000 / 2000 / 400) than the old inline approach (3000 / 1500 / 300).
+        """
+        parts = []
+        if graph_ctx:
+            parts.append("=== GRAPH CONTEXT (ground truth — Neo4j) ===")
+            parts.append(json.dumps(graph_ctx, indent=2, default=str)[:4000])
+        if struct_ctx:
+            parts.append("\n=== STRUCTURED MART DATA (ground truth — Snowflake) ===")
+            parts.append(json.dumps(struct_ctx, indent=2, default=str)[:2000])
+        if rag_chunks:
+            parts.append("\n=== RAG CHUNKS (available unstructured context) ===")
+            for i, c in enumerate(rag_chunks[:3], 1):
+                parts.append(
+                    f"[{i}] Domain: {c.get('domain','?')} "
+                    f"| Score: {c.get('hybrid_score', 0):.3f}\n"
+                    f"{str(c.get('chunk_text',''))[:400]}"
+                )
+        return "\n".join(parts) if parts else "No source data."
+
+    def _gpt4o_validate_graph(
+        self,
+        query: str,
+        answer: str,
+        graph_ctx: dict,
+        struct_ctx: dict,
+        rag_chunks: list,
+        client,
+    ) -> CheckResult:
+        """
+        GPT-4o validates Claude's graph answer against the actual source data.
+
+        Validation criteria (ported from Graph_validator_agent.py):
+          1. SCORE_ERRORS      — cited scores that don't match graph/mart data
+          2. GRADE_ERRORS      — incorrect grade labels
+          3. FABRICATED_DATA   — invented neighborhoods, scores, or facts
+          4. MISSING_INSIGHTS  — important queried-domain data that was ignored
+             ↳ CRITICAL SCOPING RULE: only flag domains the query asked about
+          5. COMPARISON_ERRORS — wrong scores used for comparison neighborhoods
+          6. RICHNESS_ISSUES   — response too short, no direct answer, ignores RAG
+
+        Cross-model rule: Claude generates → GPT-4o validates (never same model).
+        """
+        GRAPH_PASS_THRESHOLD = 75
+
+        ground_truth = self._build_graph_validation_context(
+            graph_ctx, struct_ctx, rag_chunks
+        )
+
+        # Full system prompt ported from Graph_validator_agent.py —
+        # includes the CRITICAL SCOPING RULE and exact deduction table.
+        system_prompt = f"""You are a strict quality-control validator for NeighbourWise AI,
+a Greater Boston neighborhood livability analysis system.
+
+Your job is to audit a Claude-generated neighborhood analysis against the raw data
+sources it was built from: Neo4j graph data, Snowflake mart metrics, and RAG chunks.
+
+Check for exactly these six issues:
+
+1. SCORE_ERRORS
+   Any composite_score or domain score cited in the draft that does NOT match
+   the value in the graph context. Flag the exact discrepancy.
+   Example: draft says "Safety score 72" but graph shows 50.3 → flag it.
+
+2. GRADE_ERRORS
+   Any grade label (GOOD, AFFORDABLE, EXCELLENT, etc.) that contradicts
+   the grade in the graph context or mart data.
+
+3. FABRICATED_DATA
+   Neighborhoods, scores, incident counts, prices, or relationships that
+   appear in the draft but are NOT present anywhere in the provided context.
+   This is the most serious issue — flag every invented fact.
+
+4. MISSING_INSIGHTS
+   Important data points that Claude ignored — but ONLY for the domains
+   the ORIGINAL QUERY explicitly asked about.
+
+   CRITICAL SCOPING RULE: Do NOT flag missing domains that the query did
+   not ask about. If the query is "Is Allston safe and affordable?", only
+   Safety and Housing are in scope. Do NOT flag MBTA, Restaurants, Grocery,
+   Universities etc. as missing — those domains are irrelevant to this query.
+
+   Only flag as missing_insights when:
+   - A score or grade for a QUERIED domain was available but not mentioned
+   - A direct peer comparison for a QUERIED domain was available but ignored
+   - A critical metric (e.g. incident count, rent) was in the data but omitted
+
+   Never flag: domains outside the query scope, supplementary context the
+   user didn't ask for, or data that is nice-to-have but not answering
+   the actual question.
+
+5. COMPARISON_ERRORS
+   When Claude compared the queried neighborhood to others, did it use the
+   correct scores for the comparison neighborhoods? Flag any comparison
+   where the cited score doesn't match the graph context.
+
+6. RICHNESS_ISSUES
+   Is the response under 200 words? Missing a direct answer to the query?
+   Failing to use the RAG context when it was relevant and available?
+
+Score 0-100. Start at 100.
+Deductions: -25 per fabricated fact, -15 per score error, -10 per grade error,
+            -10 per major missing insight, -5 per comparison error, -5 per richness issue.
+PASS if score >= {GRAPH_PASS_THRESHOLD} AND fabricated_data is empty.
+
+Respond ONLY with a valid JSON object. No prose before or after. Schema:
+{{
+  "verdict": "PASS" or "FAIL",
+  "score": integer 0-100,
+  "issues": {{
+    "score_errors":       ["<domain>: draft says X, graph shows Y", ...],
+    "grade_errors":       ["<domain>: draft says X, graph shows Y", ...],
+    "fabricated_data":    ["<specific invented claim>", ...],
+    "missing_insights":   ["<important data point that was ignored>", ...],
+    "comparison_errors":  ["<neighborhood>: draft says X, graph shows Y", ...],
+    "richness_issues":    ["<specific gap>", ...]
+  }},
+  "regeneration_prompt": "<3-5 sentences of specific fix instructions for Claude,
+                          telling it exactly what to correct, add, or remove.
+                          Reference specific scores and grades from the context.>"
+}}
+
+PASS criteria: score >= {GRAPH_PASS_THRESHOLD} AND fabricated_data list is empty.
+FAIL if score < {GRAPH_PASS_THRESHOLD} OR any fabricated data exists."""
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                temperature=0,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": (
+                        f"ORIGINAL QUERY:\n{query}\n\n"
+                        f"GROUND TRUTH DATA SOURCES:\n{ground_truth}\n\n"
+                        f"CLAUDE DRAFT TO VALIDATE:\n{answer[:2500]}\n\n"
+                        f"Validate the draft against the ground truth data sources "
+                        f"and return your JSON verdict."
+                    )},
+                ],
+            )
+            raw    = response.choices[0].message.content.strip()
+            result = json.loads(raw)
+
+            all_issues = []
+            for category, items in result.get("issues", {}).items():
+                all_issues.extend([f"[{category}] {i}" for i in (items or [])])
+
+            verdict = result.get("verdict", "FAIL")
+            score   = result.get("score", 0)
+            status  = PASS if verdict == "PASS" else FAIL
+
+            return CheckResult(
+                status=status,
+                issues=all_issues,
+                details={
+                    "score":              score,
+                    # Store under both keys — _improve() reads "fix_instructions",
+                    # validate_graph_output() callers may read "regeneration_prompt"
+                    "fix_instructions":   result.get("regeneration_prompt", ""),
+                    "regeneration_prompt": result.get("regeneration_prompt", ""),
+                    "raw_issues":         result.get("issues", {}),
+                },
+            )
+
+        except Exception as e:
+            return CheckResult(status=WARN, issues=[f"GPT-4o graph validation failed: {e}"])
+
+    def _claude_validate_graph(
+        self,
+        query: str,
+        answer: str,
+        graph_ctx: dict,
+        struct_ctx: dict,
+    ) -> CheckResult:
+        """Fallback: use Claude via Cortex when GPT-4o is unavailable."""
+        ground_truth = json.dumps(
+            {"graph": graph_ctx, "mart": struct_ctx}, default=str
+        )[:2000]
+
+        prompt = f"""Validate this neighborhood analysis against the source data.
+Check: (1) Are scores and grades cited correctly? (2) Any invented facts?
+(3) Missing important insights from the data?
+
+QUERY: {query}
+SOURCE DATA: {ground_truth}
+ANSWER: {answer[:1500]}
+
+Reply ONLY: NO ISSUES or LIST_ISSUES: [brief list of problems found]"""
+        try:
+            result    = cortex_complete(prompt, self.conn, model=MODEL_VALIDATE)
+            has_issue = "LIST_ISSUES" in result.upper()
+            return CheckResult(
+                status=WARN if has_issue else PASS,
+                issues=[result.strip()[:300]] if has_issue else [],
+            )
+        except Exception as e:
+            return CheckResult(status=WARN, issues=[f"Claude graph validation failed: {e}"])
 
     # ══════════════════════════════════════════════════════════════════════════
     # WEB SEARCH CHECKS
@@ -853,28 +1152,60 @@ Respond ONLY with JSON:
         search_context: str,
         client,
     ) -> CheckResult:
+        """
+        Full domain-scoped GPT-4o validation — matches validator_agent.py exactly.
+        Checks 4 categories: hallucinations, missing_alerts, citation_gaps, richness_issues.
+        Includes CRITICAL SCOPING RULES so GPT-4o never penalises correct omissions.
+        """
         PASS_THRESHOLD = 75
-        system_prompt  = f"""You are validating a web search answer for NeighbourWise AI (Boston, MA).
-Query domain: "{domain}"
+        system_prompt  = f"""You are a quality-control validator for NeighbourWise AI, \
+a neighborhood livability platform focused on Greater Boston, MA.
 
-ONLY flag:
-1. Facts in the answer not found in sources (hallucinations)
-2. Missing critical local Boston incidents directly relevant to the query
-3. Specific factual claims without citation
+You are validating an AI-generated response about the "{domain}" domain \
+for this specific query: "{query}"
 
-Score 0-100. Start at 100. -20 per hallucination, -10 per missing alert, -5 per citation gap.
-PASS if score >= {PASS_THRESHOLD} AND no hallucinations.
+CRITICAL SCOPING RULES — read carefully before flagging anything:
+- Only flag MISSING ALERTS if the omitted content is DIRECTLY relevant to \
+  the queried location (Boston or Greater Boston area) AND the queried domain ({domain}).
+- Do NOT flag content from other cities (Philadelphia, New York, etc.) as missing \
+  unless the query explicitly asks for regional comparisons.
+- Do NOT flag content from unrelated domains (CDC health alerts, immigration, \
+  weather in other states) as missing.
+- Do NOT flag general system descriptions (AlertBoston, BPD Crime Hub) as missing \
+  if they are already mentioned in the draft.
+- A citation gap is ONLY a problem if the sentence makes a SPECIFIC factual claim \
+  (date, address, statistic, named incident). General summary sentences do not \
+  need citations.
 
-Respond ONLY with JSON:
+WHAT TO CHECK:
+1. HALLUCINATIONS — specific facts (addresses, dates, names, statistics) in the \
+   draft that do NOT appear anywhere in the search context. Flag each one.
+2. MISSING ALERTS — incidents or safety alerts in the search context that are \
+   directly about the queried location AND domain, but completely absent from draft.
+3. CITATION GAPS — sentences with specific factual claims (dates, addresses, \
+   incident names, statistics) that have no [N] citation.
+4. RICHNESS — is the response under 250 words? Missing an overview paragraph? \
+   Missing a sources section?
+
+SCORING:
+- Start at 100
+- Each hallucination: -20 points
+- Each genuinely relevant missing alert: -10 points
+- Each citation gap on a specific fact: -5 points
+- Richness issue: -5 points
+- PASS if score >= {PASS_THRESHOLD} AND hallucinations list is empty
+
+Respond ONLY with valid JSON. No prose. Schema:
 {{
   "verdict": "PASS" or "FAIL",
-  "score": integer,
+  "score": integer 0-100,
   "issues": {{
-    "hallucinations": [],
-    "missing_alerts": [],
-    "citation_gaps":  []
+    "hallucinations":  ["<specific claim> — not found in sources"],
+    "missing_alerts":  ["<Boston/local alert from source omitted from draft>"],
+    "citation_gaps":   ["<specific factual sentence missing citation>"],
+    "richness_issues": ["<specific gap>"]
   }},
-  "fix_instructions": "one sentence or null"
+  "regeneration_prompt": "<2-3 sentences of targeted fix instructions for Claude>"
 }}"""
         try:
             response = client.chat.completions.create(
@@ -884,19 +1215,23 @@ Respond ONLY with JSON:
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": (
-                        f"QUERY: {query}\n\n"
-                        f"SOURCES:\n{search_context[:3000]}\n\n"
-                        f"DRAFT ANSWER:\n{draft[:2000]}"
+                        f"QUERY: {query}\n"
+                        f"DOMAIN: {domain}\n\n"
+                        f"RAW SEARCH CONTEXT (ground truth):\n{search_context[:3000]}\n\n"
+                        f"AI DRAFT TO VALIDATE:\n{draft[:2000]}\n\n"
+                        f"Validate and return JSON verdict."
                     )},
                 ],
             )
             raw    = response.choices[0].message.content.strip()
             result = json.loads(raw)
 
+            issues = result.get("issues", {})
             all_issues = (
-                result.get("issues", {}).get("hallucinations", []) +
-                result.get("issues", {}).get("missing_alerts",  []) +
-                result.get("issues", {}).get("citation_gaps",   [])
+                issues.get("hallucinations",  []) +
+                issues.get("missing_alerts",  []) +
+                issues.get("citation_gaps",   []) +
+                issues.get("richness_issues", [])
             )
             verdict = result.get("verdict", "FAIL")
             score   = result.get("score", 0)
@@ -906,8 +1241,9 @@ Respond ONLY with JSON:
                 status=status,
                 issues=all_issues,
                 details={
-                    "score":            score,
-                    "fix_instructions": result.get("fix_instructions"),
+                    "score":               score,
+                    "fix_instructions":    result.get("regeneration_prompt", ""),
+                    "raw_issues":          issues,
                 },
             )
         except Exception as e:
@@ -921,6 +1257,113 @@ Respond ONLY with JSON:
     ) -> str:
         all_issues = [i for c in checks.values() for i in c.issues]
         issue_str  = "\n".join(f"- {i}" for i in all_issues)
+
+        if agent_type == AgentType.GRAPH_QUERY:
+            query      = context.get("query", "")
+            answer     = context.get("answer", "")
+            graph_ctx  = context.get("graph_ctx", {})
+            struct_ctx = context.get("struct_ctx", {})
+            rag_chunks = context.get("rag_chunks", [])
+
+            # Extract fix instructions from GPT-4o check (stored as
+            # "fix_instructions" in CheckResult.details — see _gpt4o_validate_graph)
+            fix_instr = ""
+            for c in checks.values():
+                if c.details.get("fix_instructions"):
+                    fix_instr = c.details["fix_instructions"]
+                    break
+
+            # Build per-category fix block from raw GPT-4o issues —
+            # matches regenerate_output() in Graph_validator_agent.py
+            raw_issues = {}
+            for c in checks.values():
+                if c.details.get("raw_issues"):
+                    raw_issues = c.details["raw_issues"]
+                    break
+
+            issue_labels = {
+                "score_errors":      "Score errors to fix",
+                "grade_errors":      "Grade errors to fix",
+                "fabricated_data":   "REMOVE these fabricated claims",
+                "missing_insights":  "ADD these missing insights",
+                "comparison_errors": "Comparison errors to fix",
+                "richness_issues":   "Richness improvements needed",
+            }
+            fix_lines = []
+            for key, label in issue_labels.items():
+                items = raw_issues.get(key, [])
+                if items:
+                    fix_lines.append(f"\n{label}:")
+                    for item in items:
+                        fix_lines.append(f"  - {item}")
+            fix_block = "\n".join(fix_lines) if fix_lines else issue_str or "General quality improvements needed."
+
+            # Rebuild ground-truth context using the same helper as validation
+            # (same 4000/2000/400 limits — consistent with Graph_validator_agent.py)
+            ground_truth = self._build_graph_validation_context(
+                graph_ctx, struct_ctx, rag_chunks
+            )
+
+            # System prompt ported from REGEN_SYSTEM_PROMPT in Graph_validator_agent.py
+            system_prompt = (
+                "You are the NeighbourWise AI graph agent for Greater Boston "
+                "neighborhood livability analysis. You previously generated a response "
+                "that failed quality validation. You must now produce a corrected version.\n\n"
+                "Rules:\n"
+                "- Fix EVERY issue listed in the validator findings below\n"
+                "- Use ONLY the data provided in the context — do not invent scores, grades, or facts\n"
+                "- Quote exact scores and grades from the graph/mart data "
+                "(e.g. \"Safety score 50.3, GOOD grade\")\n"
+                "- Keep response between 300–500 words\n"
+                "- End with: \"Sources: [graph] [structured mart] [RAG chunks]\" "
+                "listing which contributed\n"
+                "- Do NOT copy the previous draft — write fresh from the context"
+            )
+            user_msg = (
+                f"ORIGINAL QUERY: {query}\n\n"
+                f"PREVIOUS DRAFT (contains issues — do NOT copy blindly):\n{answer[:2000]}\n\n"
+                f"VALIDATOR FINDINGS — fix ALL of these:\n{fix_block}\n\n"
+                f"VALIDATOR INSTRUCTION:\n{fix_instr}\n\n"
+                f"GROUND TRUTH CONTEXT (use as your only source of facts):\n{ground_truth}\n\n"
+                f"Write a fully corrected response now."
+            )
+
+            # Retry loop: up to MAX_RETRIES=2 attempts with RateLimitError handling
+            # — matches regenerate_output() retry behaviour in Graph_validator_agent.py
+            _MAX_RETRIES  = 2
+            _RETRY_DELAY  = 2   # seconds between attempts
+            import anthropic as _anthropic
+            import time as _time
+            _client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+
+            for attempt in range(1, _MAX_RETRIES + 2):  # attempts 1..3
+                try:
+                    resp = _client.messages.create(
+                        model="claude-sonnet-4-6",
+                        max_tokens=700,
+                        system=system_prompt,
+                        messages=[{"role": "user", "content": user_msg}],
+                    )
+                    return resp.content[0].text.strip()
+
+                except _anthropic.RateLimitError:
+                    if attempt <= _MAX_RETRIES:
+                        wait = 30 * attempt
+                        print(f"[Validator] Anthropic rate limit — retry in {wait}s "
+                              f"(attempt {attempt}/{_MAX_RETRIES + 1})")
+                        _time.sleep(wait)
+                    else:
+                        print("[Validator] Anthropic rate limit — max retries reached, "
+                              "falling back to Cortex")
+                        break
+                except Exception as e:
+                    print(f"[Validator] Graph improve via Claude failed ({e}) "
+                          f"— falling back to Cortex")
+                    break
+
+            # Cortex fallback (no RateLimitError, just a soft degradation)
+            prompt = f"{system_prompt}\n\n{user_msg}"
+            return cortex_complete(prompt, self.conn, model=MODEL_VALIDATE)
 
         if agent_type == AgentType.DATA_QUERY:
             sql_data = context.get("sql_data", {})
@@ -962,28 +1405,116 @@ Improved answer:"""
             draft          = context.get("draft", "")
             search_context = context.get("search_context", "")
             query          = context.get("query", "")
-            fix_instr      = ""
+            domain         = context.get("domain", "All")
+
+            # Extract per-category issues from the GPT-4o check details
+            raw_issues = {}
+            regen_prompt = ""
             for c in checks.values():
+                if c.details.get("raw_issues"):
+                    raw_issues = c.details["raw_issues"]
                 if c.details.get("fix_instructions"):
-                    fix_instr = c.details["fix_instructions"]
-                    break
+                    regen_prompt = c.details["fix_instructions"]
 
-            prompt = f"""Fix this web search answer for NeighbourWise AI.
+            hallucinations  = raw_issues.get("hallucinations",  [])
+            missing_alerts  = raw_issues.get("missing_alerts",  [])
+            citation_gaps   = raw_issues.get("citation_gaps",   [])
+            richness_issues = raw_issues.get("richness_issues", [])
 
-QUERY: {query}
-DRAFT: {draft[:2000]}
-ISSUES:
-{issue_str}
-FIX INSTRUCTIONS: {fix_instr}
-SOURCES: {search_context[:2000]}
+            # Build structured per-category fix blocks (matches validator_agent.py)
+            fix_blocks = []
+            if hallucinations:
+                fix_blocks.append(
+                    "REMOVE these hallucinated claims (not in sources):\n" +
+                    "\n".join(f"  - {h}" for h in hallucinations)
+                )
+            if missing_alerts:
+                fix_blocks.append(
+                    "ADD these missing local incidents from the sources:\n" +
+                    "\n".join(f"  - {m}" for m in missing_alerts)
+                )
+            if citation_gaps:
+                fix_blocks.append(
+                    "ADD [N] citations to these specific factual claims:\n" +
+                    "\n".join(f"  - {c}" for c in citation_gaps)
+                )
+            if richness_issues:
+                fix_blocks.append(
+                    "FIX these richness gaps:\n" +
+                    "\n".join(f"  - {r}" for r in richness_issues)
+                )
 
-Write a corrected response with:
-1. OVERVIEW (3-5 sentences, cite sources as [N])
-2. KEY FINDINGS (one ## section per finding with dates/addresses where available)
-3. SOURCES (numbered list)
+            fix_section = "\n\n".join(fix_blocks) if fix_blocks else "General quality improvement."
 
-Corrected response:"""
-            return cortex_complete(prompt, self.conn, model=MODEL_VALIDATE)
+            domain_ctx = (
+                f'This query is about the "{domain}" domain of neighborhood livability.'
+                if domain != "All" else "This query covers neighborhood livability."
+            )
+
+            system_prompt = f"""You are a neighborhood intelligence analyst for NeighbourWise AI. \
+{domain_ctx}
+
+A GPT-4o validator reviewed your previous draft and found specific issues. \
+Produce an improved version that fixes every flagged problem below.
+
+RESPONSE STRUCTURE:
+1. OVERVIEW PARAGRAPH (3-5 sentences) — situational context, severity, trend. Cite [N].
+2. KEY INCIDENTS & ALERTS (one ## section per item) — exact date, time, address, \
+   what happened, status. Cite [N].
+3. BACKGROUND & CONTEXT — stats, official resources. Cite [N].
+4. SOURCES — numbered URL list.
+
+RULES:
+- Only include facts that appear in the search context. No invention.
+- Only cite local Boston/Greater Boston content relevant to the query.
+- Do not include incidents from other cities unless directly requested.
+- Every specific factual claim (date, address, statistic) needs a [N] citation.
+- No markdown bold (**). Use ## headings only.
+- Target 400-600 words."""
+
+            user_message = f"""QUERY: {query}
+
+PREVIOUS DRAFT (fix the issues below — do not copy blindly):
+{draft[:2000]}
+
+VALIDATOR ISSUES TO FIX:
+{fix_section}
+
+VALIDATOR INSTRUCTION:
+{regen_prompt}
+
+RAW SEARCH CONTEXT (your only allowed source of facts):
+{search_context[:2500]}
+
+Write the corrected response now."""
+
+            # Use direct Anthropic call with retry (not Cortex) to match
+            # web_search_agent.py which uses Claude directly
+            try:
+                import anthropic as _anthropic
+                import time as _time
+
+                _client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+                for attempt in range(1, 4):
+                    try:
+                        resp = _client.messages.create(
+                            model="claude-sonnet-4-6",
+                            max_tokens=2000,
+                            system=system_prompt,
+                            messages=[{"role": "user", "content": user_message}],
+                        )
+                        return resp.content[0].text.strip()
+                    except _anthropic.OverloadedError:
+                        if attempt < 3:
+                            wait = 15 * attempt
+                            print(f"[Validator] Anthropic overloaded — retry in {wait}s ({attempt}/3)")
+                            _time.sleep(wait)
+                        else:
+                            raise
+            except Exception as e:
+                print(f"[Validator] Web search improve via Claude failed ({e}) — using Cortex fallback")
+                prompt = f"{system_prompt}\n\nQUERY: {query}\n\nPREVIOUS DRAFT:\n{draft[:2000]}\n\nISSUES:\n{fix_section}\n\nSOURCES:\n{search_context[:2000]}\n\nCorrected response:"
+                return cortex_complete(prompt, self.conn, model=MODEL_VALIDATE)
 
         # For graphic/report agents — improvement happens at agent level
         return ""
@@ -1025,4 +1556,59 @@ def validate_and_improve(
         },
         "improved": result.improved,
         "draft":    draft_answer,
+    }
+
+
+# ── Graph-specific convenience (no Snowflake conn needed) ─────────────────────
+def validate_graph_output(
+    query: str,
+    answer: str,
+    graph_ctx: dict,
+    struct_ctx: dict,
+    rag_chunks: list,
+    neighborhood: str = None,
+    domains: list = None,
+) -> dict:
+    """
+    Convenience wrapper for validating graph agent output via UniversalValidator.
+
+    Unlike validate_and_improve() which needs a Snowflake conn, this function
+    passes a None conn — safe because the GRAPH_QUERY path uses GPT-4o / direct
+    Anthropic and never calls cortex_complete() for its primary checks.
+
+    Returns the same feedback dict shape as validate_and_improve():
+        {
+            "answer":   str,        # improved answer (or original if passed)
+            "feedback": dict,       # checks, needs_improvement, all_issues
+            "improved": bool,
+            "draft":    str,
+        }
+    """
+    # UniversalValidator accepts conn=None safely for GRAPH_QUERY agent type
+    # because _validate_graph_query uses GPT-4o, and _improve GRAPH_QUERY
+    # uses direct Anthropic — neither requires self.conn
+    validator = UniversalValidator(conn=None)
+    ctx = {
+        "query":        query,
+        "answer":       answer,
+        "graph_ctx":    graph_ctx,
+        "struct_ctx":   struct_ctx,
+        "rag_chunks":   rag_chunks,
+        "neighborhood": neighborhood,
+        "domains":      domains or [],
+    }
+    result = validator.validate(AgentType.GRAPH_QUERY, ctx)
+    return {
+        "answer":   result.result if result.result else answer,
+        "feedback": {
+            "checks": {
+                name: {"status": c.status, "issues": c.issues}
+                for name, c in result.checks.items()
+            },
+            "needs_improvement": not result.passed,
+            "total_issues":      len(result.all_issues),
+            "all_issues":        result.all_issues,
+        },
+        "improved": result.improved,
+        "draft":    answer,
     }
