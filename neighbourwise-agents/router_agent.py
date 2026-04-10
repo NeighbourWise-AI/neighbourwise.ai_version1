@@ -37,19 +37,17 @@ from universal_validator import UniversalValidator, AgentType, validate_and_impr
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SPEED FIX 1 — FAST KEYWORD CLASSIFIER (0ms, no Cortex call)
-# Falls back to Cortex only when keywords are ambiguous.
+# NEIGHBORHOOD EXTRACTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Neighborhoods we know about — used to extract names cheaply
 _KNOWN_NEIGHBORHOODS = [
     "Fenway", "Roxbury", "Dorchester", "Back Bay", "Beacon Hill",
-    "South End", "Jamaica Plain", "Allston", "East Boston", "Charlestown",
-    "Mission Hill", "Hyde Park", "Roslindale", "Mattapan", "North End",
-    "Chinatown", "Downtown", "South Boston", "West End", "Longwood",
-    "Cambridge", "Somerville", "Brookline", "Newton", "Medford",
-    "Malden", "Revere", "Chelsea", "Everett", "Arlington",
-    "Watertown", "Salem", "Quincy",
+    "South End", "Jamaica Plain", "Allston", "Brighton", "East Boston",
+    "Charlestown", "Mission Hill", "Hyde Park", "Roslindale", "Mattapan",
+    "North End", "Chinatown", "Downtown", "South Boston", "West End",
+    "Longwood", "West Roxbury", "Cambridge", "Somerville", "Brookline",
+    "Newton", "Medford", "Malden", "Revere", "Chelsea", "Everett",
+    "Arlington", "Watertown", "Salem", "Quincy",
 ]
 
 def _extract_neighborhood_fast(query: str) -> Optional[str]:
@@ -60,30 +58,116 @@ def _extract_neighborhood_fast(query: str) -> Optional[str]:
             return n
     return None
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DOMAIN DETECTION — the foundation of all routing decisions
+#
+# Every query is first scanned for domain signals. The number of domains
+# detected then drives the intent:
+#   0 domains detected   → ambiguous, fall back to Cortex
+#   1 domain detected    → data_query  (SQL + RAG is sufficient)
+#   2+ domains detected  → graph_query (Neo4j cross-domain analysis needed)
+#
+# Non-data intents (report, chart, image, web_search) are detected first
+# via hard keywords and always take priority over domain counting.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Mirrors the domain keyword map in Graph_agent.py so routing is consistent
+_DOMAIN_KEYWORDS = {
+    "Safety": [
+        "safe", "safety", "crime", "violent", "theft", "assault",
+        "police", "incident", "robbery", "shooting", "dangerous",
+    ],
+    "Housing": [
+        "rent", "housing", "affordable", "afford", "price", "sqft",
+        "property", "buy", "home", "apartment", "condo", "assessed",
+        "value", "expensive", "cheap", "cost of living",
+    ],
+    "MBTA": [
+        "mbta", "transit", "subway", "bus", "train", "commute",
+        "green line", "red line", "orange line", "blue line",
+        "silver line", "stop", "station", "rapid transit", "t stop",
+    ],
+    "Grocery": [
+        "grocery", "supermarket", "food store", "market",
+        "whole foods", "trader joe", "star market",
+    ],
+    "Healthcare": [
+        "hospital", "clinic", "doctor", "health", "medical",
+        "urgent care", "pharmacy", "healthcare", "facility",
+    ],
+    "Restaurants": [
+        "restaurant", "dining", "eat", "food", "cafe",
+        "bar", "cuisine", "takeout", "delivery",
+    ],
+    "Schools": [
+        "school", "elementary", "middle school", "high school",
+        "public school", "charter", "k-12", "district", "education",
+    ],
+    "Universities": [
+        "university", "college", "campus", "mit", "harvard",
+        "northeastern", "boston university", "student", "degree",
+    ],
+    "Bluebikes": [
+        "bluebikes", "bike share", "bicycle", "bikeshare", "cycling",
+    ],
+}
+
+# General livability signals — presence of ANY of these forces graph_query
+# regardless of how many domains were detected, because they imply a
+# holistic cross-domain question even when phrased around one topic
+_LIVABILITY_SIGNALS = [
+    "livab", "quality of life", "overall", "good neighborhood", "good area",
+    "good place to live", "best neighborhood", "best area", "best place",
+    "should i move", "planning to move", "thinking of moving",
+    "pros and cons", "worth living", "family friendly", "recommend",
+    "where should i", "is it worth", "how is", "what is it like",
+    "tell me about",
+]
+
+# Graph relationship signals — always graph_query
+_GRAPH_SIGNALS = [
+    "similar to", "neighbors of", "borders", "which neighborhoods are like",
+    "comparable to", "same mbta", "same line", "transit connected",
+    "nearby neighborhoods", "adjacent to",
+]
+
+
+def _detect_domains(query: str) -> list[str]:
+    """Return list of domain names detected in the query (0 = ambiguous)."""
+    q = query.lower()
+    return [d for d, kws in _DOMAIN_KEYWORDS.items() if any(k in q for k in kws)]
+
+
 def _keyword_classify(query: str) -> Optional[dict]:
     """
-    Pure keyword classification. Returns a result dict if confident,
-    or None if the query is ambiguous and needs Cortex.
-    Covers ~80% of real queries with 0 latency.
+    Domain-aware classifier.
+
+    Priority order:
+      1. report / image / web_search / chart  — hard keyword signals
+      2. graph relationship signals            — always graph_query
+      3. general livability signals            — always graph_query
+      4. domain count:
+            2+ domains → graph_query   (cross-domain = graph agent)
+            1 domain   → data_query    (single domain = SQL + RAG)
+            0 domains  → None          (ambiguous → Cortex fallback)
     """
-    q = query.lower()
+    q    = query.lower()
     nbhd = _extract_neighborhood_fast(query)
 
-    # ── Report signals (highest priority) ────────────────────────────────────
+    # ── 1. Non-data intents (always take priority) ────────────────────────────
     if any(k in q for k in ["generate report", "full report", "report for",
                               "neighborhood report", "pdf"]):
         return {"intent": "report", "neighborhood": nbhd,
                 "domain": None, "confidence": 0.95,
                 "reasoning": "keyword: report"}
 
-    # ── Image signals ─────────────────────────────────────────────────────────
     if any(k in q for k in ["look like", "photos of", "pictures of",
                               "images of", "show me photos", "show me pictures"]):
         return {"intent": "image", "neighborhood": nbhd,
                 "domain": None, "confidence": 0.95,
                 "reasoning": "keyword: image"}
 
-    # ── Web search signals ────────────────────────────────────────────────────
     if any(k in q for k in ["latest", "recent", "news", "current", "today",
                               "this week", "opening", "closing", "update",
                               "2025", "2026", "happening", "right now"]):
@@ -91,76 +175,122 @@ def _keyword_classify(query: str) -> Optional[dict]:
                 "domain": None, "confidence": 0.9,
                 "reasoning": "keyword: web_search"}
 
-    # ── Chart signals ─────────────────────────────────────────────────────────
-    if any(k in q for k in ["chart", "graph", "plot", "scatter", "trend",
+    if any(k in q for k in ["chart", "plot", "scatter", "trend",
                               "over time", "monthly", "rank all", "top 10",
                               "top 5", "correlation", "breakdown", "percentage",
-                              "compare", "vs ", "versus"]):
+                              "vs ", "versus"]):
         return {"intent": "chart", "neighborhood": nbhd,
                 "domain": None, "confidence": 0.85,
                 "reasoning": "keyword: chart"}
 
-    # ── Unambiguous data_query signals ────────────────────────────────────────
-    if any(k in q for k in ["how many", "what is the", "which neighborhoods",
-                              "average rent", "list all", "find me", "tell me about",
-                              "is it safe", "is it good", "should i move",
-                              "planning to move", "thinking of moving",
-                              "score for", "grade for"]):
-        return {"intent": "data_query", "neighborhood": nbhd,
-                "domain": None, "confidence": 0.85,
-                "reasoning": "keyword: data_query"}
+    # ── 2. Explicit graph relationship signals → always graph_query ───────────
+    if any(k in q for k in _GRAPH_SIGNALS):
+        return {"intent": "graph_query", "neighborhood": nbhd,
+                "domain": None, "confidence": 0.95,
+                "reasoning": "graph relationship keyword detected"}
 
-    # Ambiguous — let Cortex decide
+    # ── 3. General livability signals → always graph_query ────────────────────
+    if any(k in q for k in _LIVABILITY_SIGNALS):
+        return {"intent": "graph_query", "neighborhood": nbhd,
+                "domain": None, "confidence": 0.90,
+                "reasoning": "livability signal detected — graph agent for holistic answer"}
+
+    # ── 4. Domain counting — the core routing logic ───────────────────────────
+    detected = _detect_domains(query)
+    n_domains = len(detected)
+    domains_str = ", ".join(detected) if detected else "none"
+
+    if n_domains >= 2:
+        # Multiple domains = cross-domain question → graph agent
+        return {"intent": "graph_query", "neighborhood": nbhd,
+                "domain": None, "confidence": 0.92,
+                "reasoning": f"{n_domains} domains detected ({domains_str}) → graph agent"}
+
+    if n_domains == 1:
+        # Single domain = simple lookup → SQL + RAG data agent
+        return {"intent": "data_query", "neighborhood": nbhd,
+                "domain": detected[0].upper(), "confidence": 0.88,
+                "reasoning": f"single domain detected ({domains_str}) → data query"}
+
+    # 0 domains detected — genuinely ambiguous, let Cortex decide
     return None
 
 
-# Cortex classification only called when keywords are ambiguous
+# Cortex fallback prompt — only reached when 0 domains were detected
 _CLASSIFICATION_PROMPT = """Classify this Boston neighborhood query into ONE intent.
 
-INTENTS: report | chart | image | data_query | web_search
+INTENTS: report | chart | image | data_query | web_search | graph_query
 
-- report:      "generate report", "full report", "pdf"
-- chart:       "chart", "graph", "compare", "rank", "trend", "scatter"
-- image:       "look like", "photos", "pictures", "images"
-- web_search:  "latest", "recent", "news", "current", "today", "update"
-- data_query:  factual questions answered by the database (default)
+Rules:
+- report:       "generate report", "full report", "pdf"
+- chart:        "chart", "plot", "rank", "trend", "scatter", "vs", "versus"
+- image:        "look like", "photos", "pictures", "images"
+- web_search:   "latest", "recent", "news", "current", "today", "update"
+- graph_query:  ANY query touching 2+ livability domains (safety + housing,
+                transit + schools, etc.), OR holistic neighborhood questions
+                (should I move, good place to live, quality of life, overall,
+                recommend, similar to, comparable to, family friendly)
+- data_query:   single-domain factual lookup (how many hospitals, average rent,
+                list all schools, safety score for X) — narrow queries only
 
 Respond ONLY with JSON:
-{"intent":"...","neighborhood":"Title Case or null","domain":"or null","confidence":0.0-1.0,"reasoning":"one sentence"}
+{{"intent":"...","neighborhood":"Title Case or null","domain":"UPPERCASE single domain or null","confidence":0.0-1.0,"reasoning":"one sentence"}}
 
 Query: "{query}"
 JSON:"""
 
 def classify_query(query: str, conn) -> dict:
     """
-    Fast path: keyword rules (0ms).
-    Slow path: Cortex Mistral (~3-5s) only when keywords are ambiguous.
+    Domain-aware classifier.
+
+    Step 1: Check for non-data intents (report/image/web_search/chart) via
+            hard keywords — these always take priority.
+    Step 2: Detect which of the 9 livability domains the query touches.
+    Step 3: Route based on domain count:
+              2+ domains  → graph_query   (cross-domain = Neo4j graph agent)
+              1 domain    → data_query    (single domain = SQL + RAG)
+              0 domains + neighborhood → web_search  (outside our data, search the web)
+              0 domains, no neighborhood → Cortex LLM for final classification
     """
-    # Fast path — covers ~80% of queries
+    detected = _detect_domains(query)
+    nbhd     = _extract_neighborhood_fast(query)
+
+    print(f"[Router] Domains detected : {detected if detected else '(none)'}")
+    print(f"[Router] Neighborhood     : {nbhd}")
+
     result = _keyword_classify(query)
     if result is not None:
-        print(f"[Router] ⚡ Fast classify → {result['intent']} (no LLM)")
-        print(f"[Router] Intent     : {result['intent']}")
-        print(f"[Router] Neighborhood: {result.get('neighborhood')}")
-        print(f"[Router] Confidence  : {result['confidence']}")
+        print(f"[Router] ⚡ Classified → {result['intent'].upper()}  |  {result['reasoning']}")
         return result
 
-    # Slow path — Cortex fallback for ambiguous queries
-    print(f"[Router] 🔄 Ambiguous query — falling back to Cortex classify...")
+    # 0 domains detected — query is outside our 9 structured domains
+    # If a neighborhood was mentioned → user is asking something about that
+    # neighborhood that our data doesn't cover → web search is the right answer
+    if not detected:
+        print(f"[Router] 0 domains detected → routing to web_search (outside structured data)")
+        return {
+            "intent":       "web_search",
+            "neighborhood": nbhd,
+            "domain":       "All",
+            "confidence":   0.80,
+            "reasoning":    "no livability domain detected — web search for open-ended query",
+        }
+
+    # Should not reach here given _keyword_classify covers all domain cases,
+    # but keep Cortex as a final safety net
+    print(f"[Router] Falling back to Cortex classify...")
     prompt = _CLASSIFICATION_PROMPT.format(query=query)
     raw    = cortex_complete(prompt, conn, model=MODEL_GENERATE)
     try:
         raw    = re.sub(r"```(?:json)?|```", "", raw).strip()
         result = json.loads(raw)
-        print(f"[Router] Intent     : {result.get('intent')}")
-        print(f"[Router] Neighborhood: {result.get('neighborhood')}")
-        print(f"[Router] Confidence  : {result.get('confidence')}")
+        print(f"[Router] Cortex → {result.get('intent','?').upper()}  |  {result.get('reasoning','')}")
         return result
     except json.JSONDecodeError:
-        print(f"[Router] JSON parse failed — defaulting to data_query")
+        print(f"[Router] Cortex JSON parse failed — defaulting to web_search")
         return {
-            "intent": "data_query", "neighborhood": _extract_neighborhood_fast(query),
-            "domain": None, "confidence": 0.5, "reasoning": "parse fallback",
+            "intent": "web_search", "neighborhood": nbhd,
+            "domain": "All", "confidence": 0.5, "reasoning": "parse fallback",
         }
 
 
@@ -596,42 +726,36 @@ def handle_image(neighborhood: str, conn) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def handle_web_search(query: str, domain: str = "All") -> dict:
-    print(f"\n[WebSearch] Processing: {query} (domain: {domain})")
+    """
+    Delegates to run_web_search() in web_search_agent.py.
+    That function handles the full pipeline:
+      Serper web + news → deep URL fetch → Claude Opus draft
+      → UniversalValidator (GPT-4o or Claude fallback)
+
+    domain is passed through so the agent uses the right URL priorities
+    and news keywords. When routing from 0-domain detection, domain="All".
+    """
+    print(f"\n[WebSearch] Processing: {query!r}  (domain: {domain})")
     try:
-        from web_search_agent import (
-            serper_search, format_web_results, format_news_results,
-            deep_fetch_top_urls, generate_draft, DOMAIN_NEWS_KEYWORDS,
+        from web_search_agent import run_web_search
+        result = run_web_search(query, domain=domain, use_validator=True)
+
+        val = result.get("validation") or {}
+        print(
+            f"[WebSearch] Done | sources={result.get('sources_fetched', 0)} | "
+            f"passed={val.get('passed')} score={val.get('score')}/100 "
+            f"improved={val.get('improved')}"
         )
-        news_suffix = DOMAIN_NEWS_KEYWORDS.get(domain, "Boston 2026")
-        web_data    = serper_search(query, search_type="search", num_results=10)
-        news_data   = serper_search(query + f" {news_suffix} 2025 2026",
-                                    search_type="news", num_results=8)
-        search_ctx  = format_web_results(web_data) + "\n\n" + format_news_results(news_data)
-        try:
-            fetched = deep_fetch_top_urls(web_data.get("organic", []), domain, max_fetch=3)
-            if fetched:
-                search_ctx += "\n\n" + fetched
-        except Exception as e:
-            print(f"[WebSearch] Deep fetch warning: {e}")
+        return {
+            "type":       "web_search",
+            "answer":     result.get("answer", ""),
+            "validation": val,
+            "sources_fetched": result.get("sources_fetched", 0),
+        }
 
-        draft      = generate_draft(query, domain, search_ctx)
-        result_text = draft
-        validation  = None
-
-        if os.environ.get("OPENAI_API_KEY"):
-            try:
-                from validator_agent import validate_and_regenerate
-                val    = validate_and_regenerate(query, domain, draft, search_ctx, verbose=False)
-                result_text = val["final_output"]
-                validation  = {
-                    "passed":       val["passed"],
-                    "regenerated":  val["regenerated"],
-                    "score":        val["final_verdict"].get("score"),
-                }
-            except Exception as e:
-                print(f"[WebSearch] Validation error (non-fatal): {e}")
-
-        return {"type": "web_search", "answer": result_text, "validation": validation}
+    except ImportError as e:
+        print(f"[WebSearch] Import error: {e}")
+        return {"type": "web_search", "error": f"web_search_agent not found: {e}"}
     except Exception as e:
         print(f"[WebSearch] Error: {e}")
         return {"type": "web_search", "error": str(e)}
@@ -701,7 +825,49 @@ def handle_report(neighborhood: str, conn) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN ROUTER
+# GRAPH AGENT HANDLER
+# Direct in-process call to ask_graph_agent() — no HTTP server required.
+# The graph agent runs the full Neo4j + Snowflake + RAG + GPT-4o pipeline
+# and returns a dict compatible with the router's other handler outputs.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def handle_graph_query(query: str, neighborhood: str = None) -> dict:
+    """
+    Calls ask_graph_agent() directly (no HTTP round-trip).
+    Falls back to handle_data_query() if the graph agent import fails.
+    """
+    print(f"\n[GraphAgent] Processing: {query} (neighborhood: {neighborhood})")
+    t0 = time.time()
+
+    try:
+        from Graph_agent import ask_graph_agent
+        result = ask_graph_agent(query, neighborhood=neighborhood)
+
+        val = result.get("validation", {})
+        print(
+            f"[GraphAgent] Done in {time.time()-t0:.1f}s | "
+            f"passed={val.get('passed')} "
+            f"score={val.get('score')}/100 "
+            f"regenerated={val.get('regenerated')} "
+            f"attempts={val.get('attempts')}"
+        )
+        return result
+
+    except ImportError as e:
+        print(f"[GraphAgent] ⚠️  Import failed ({e}) — falling back to data_query")
+        conn = get_conn()
+        try:
+            result = handle_data_query(query, conn)
+            result["_graph_fallback"] = True
+            return result
+        finally:
+            conn.close()
+
+    except Exception as e:
+        print(f"[GraphAgent] Error: {e}")
+        return {"type": "graph_query", "error": str(e)}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 
 def route(query: str, conn, domain_filter: str = None) -> dict:
@@ -726,6 +892,8 @@ def route(query: str, conn, domain_filter: str = None) -> dict:
         return handle_image(neighborhood or _extract_neighborhood_fast(query) or "", conn)
     elif intent == "web_search":
         return handle_web_search(query, domain=domain)
+    elif intent == "graph_query":
+        return handle_graph_query(query, neighborhood=neighborhood)
     else:
         return handle_data_query(query, conn, domain_filter=domain_filter)
 
@@ -745,12 +913,42 @@ def display_result(result: dict):
               f"RAG chunks: {len(result.get('rag_chunks') or [])}")
         tag = "🔍 Improved" if result.get("improved") else "✅ Passed"
         print(f"Validator: {tag}")
+    elif rtype == "graph_query":
+        print(f"\n{result.get('answer','')}")
+        val = result.get("validation", {})
+        if val:
+            status = "✅ Passed" if val.get("passed") else "🔍 Regenerated"
+            regen  = f" (attempt {val.get('attempts')})" if val.get("regenerated") else ""
+            print(f"\nGraph validator: {status}{regen} | Score: {val.get('score')}/100")
+            # Print per-check breakdown (same style as data_query)
+            checks = val.get("checks", {})
+            if checks:
+                for name, c in checks.items():
+                    issues = c.get("issues", [])
+                    if issues:
+                        print(f"   {c.get('status','')} {name}")
+                        for issue in issues:
+                            print(f"      → {issue[:120]}")
+        src = result.get("sources", {})
+        print(f"Sources: graph={src.get('graph_nodes')} | "
+              f"mart={src.get('structured_mart')} | "
+              f"rag_chunks={src.get('rag_chunks',0)}")
+        if result.get("_graph_fallback"):
+            print("⚠️  Graph agent unavailable — answered via SQL fallback")
     elif rtype == "chart":
         print(f"\n{'✅' if result.get('path') else '❌'} {result.get('path','failed')}")
     elif rtype == "image":
         print(f"\n✅ {len(result.get('paths',[]))}/4 images for {result.get('neighborhood','')}")
     elif rtype == "web_search":
         print(f"\n{result.get('answer','')}")
+        val = result.get("validation") or {}
+        if val and not val.get("error"):
+            tag = "✅ Passed" if val.get("passed") else ("🔍 Improved" if val.get("improved") else "❌ Failed")
+            score = val.get("score", "?")
+            srcs  = result.get("sources_fetched", 0)
+            print(f"\nWeb validator: {tag} | Score: {score}/100 | Sources fetched: {srcs}")
+            for issue in (val.get("issues") or [])[:5]:
+                print(f"   → {issue[:120]}")
     elif rtype == "report":
         print(f"\n{'✅' if result.get('pdf_path') else '❌'} {result.get('pdf_path','failed')}")
     print(f"\n{'─'*65}\n")

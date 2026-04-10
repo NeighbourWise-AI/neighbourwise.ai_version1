@@ -117,10 +117,22 @@ Check for exactly these six issues:
    This is the most serious issue — flag every invented fact.
 
 4. MISSING_INSIGHTS
-   Important data points available in the context that Claude completely
-   ignored. Examples: a domain with an extreme score (very high or very low),
-   neighboring neighborhoods that were relevant but omitted, MBTA lines
-   that were relevant to the query but not mentioned.
+   Important data points that Claude ignored — but ONLY for the domains
+   the ORIGINAL QUERY explicitly asked about.
+
+   CRITICAL SCOPING RULE: Do NOT flag missing domains that the query did
+   not ask about. If the query is "Is Allston safe and affordable?", only
+   Safety and Housing are in scope. Do NOT flag MBTA, Restaurants, Grocery,
+   Universities etc. as missing — those domains are irrelevant to this query.
+
+   Only flag as missing_insights when:
+   - A score or grade for a QUERIED domain was available but not mentioned
+   - A direct peer comparison for a QUERIED domain was available but ignored
+   - A critical metric (e.g. incident count, rent) was in the data but omitted
+
+   Never flag: domains outside the query scope, supplementary context the
+   user didn't ask for, or data that is nice-to-have but not answering
+   the actual question.
 
 5. COMPARISON_ERRORS
    When Claude compared the queried neighborhood to others, did it use the
