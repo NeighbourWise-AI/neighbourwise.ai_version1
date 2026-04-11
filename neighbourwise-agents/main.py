@@ -12,8 +12,23 @@ Endpoints:
 
 Run:
     uvicorn main:app --reload
-    
+
 Then navigate to: http://localhost:8000/docs
+
+Changes vs previous version:
+  - _has_web_only_signal: fixed undefined _WEB_ONLY_HARD/_WEATHER_TIME_WORDS/_EVENT_SIGNALS
+    → now uses the _WEB_ONLY_SIGNALS list that is actually defined
+  - _dispatch_graph_query: fixed wrong function name run_graph_agent → ask_graph_agent
+    → now passes detected neighborhood so graph agent doesn't re-extract it
+  - Added full routing constants: _DOMAIN_KEYWORDS, _KNOWN_NEIGHBORHOODS,
+    _LIVABILITY_INTENT, _BOSTON_GEOGRAPHY, _NON_BOSTON_CITIES, _WEB_ONLY_SIGNALS
+  - Added RoutingMeta pydantic model returned with every query response
+  - Added smart routing helpers: detect_domains, detect_neighborhoods,
+    determine_intent, build_routing_meta
+  - Added agent dispatch functions: _dispatch_data_query, _dispatch_graph_query,
+    _dispatch_web_search, _dispatch_chart, _dispatch_report
+  - process_query endpoint rebuilt: pre-classifies intent before opening DB,
+    routes to correct agent, propagates fallback info into routing_meta
 """
 
 import os
@@ -47,21 +62,28 @@ logger = logging.getLogger(__name__)
 # DOMAIN & ROUTING CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Keyword → canonical domain tag (mirrors router_agent._DOMAIN_KEYWORDS)
 _DOMAIN_KEYWORDS: Dict[str, List[str]] = {
-    "SAFETY":     ["crime", "safe", "safety", "incident", "violent", "theft", "assault", "police", "shooting", "robbery"],
-    "HOUSING":    ["housing", "rent", "apartment", "price", "afford", "sqft", "bedroom", "buy", "home", "mortgage", "condo"],
-    "RESTAURANT": ["restaurant", "food", "eat", "dining", "cafe", "bar", "coffee", "cuisine", "brunch", "lunch", "dinner"],
-    "HEALTHCARE": ["hospital", "clinic", "doctor", "health", "medical", "pharmacy", "urgent care", "dentist", "healthcare"],
-    "SCHOOLS":    ["school", "education", "college", "university", "k-12", "rating", "academic", "district", "student"],
-    "GROCERY":    ["grocery", "supermarket", "market", "whole foods", "trader joe", "star market", "store", "provisions"],
-    "TRANSIT":    ["mbta", "transit", "bus", "subway", "train", "commute", "t-stop", "green line", "red line", "orange line", "blue line"],
-    "BLUEBIKES":  ["bluebike", "bike", "cycling", "bicycle", "bikeshare", "docking station"],
-    "WEATHER":    ["weather", "temperature", "rain", "snow", "climate", "cold", "warm", "season", "humidity"],
+    "SAFETY":     ["crime", "safe", "safety", "incident", "violent", "theft",
+                   "assault", "police", "shooting", "robbery"],
+    "HOUSING":    ["housing", "rent", "apartment", "price", "afford", "sqft",
+                   "bedroom", "buy", "home", "mortgage", "condo"],
+    "RESTAURANT": ["restaurant", "food", "eat", "dining", "cafe", "bar",
+                   "coffee", "cuisine", "brunch", "lunch", "dinner"],
+    "HEALTHCARE": ["hospital", "clinic", "doctor", "health", "medical",
+                   "pharmacy", "urgent care", "dentist", "healthcare"],
+    "SCHOOLS":    ["school", "education", "college", "university", "k-12",
+                   "rating", "academic", "district", "student"],
+    "GROCERY":    ["grocery", "supermarket", "market", "whole foods",
+                   "trader joe", "star market", "store", "provisions"],
+    "TRANSIT":    ["mbta", "transit", "bus", "subway", "train", "commute",
+                   "t-stop", "green line", "red line", "orange line", "blue line"],
+    "BLUEBIKES":  ["bluebike", "bike", "cycling", "bicycle", "bikeshare",
+                   "docking station"],
+    "WEATHER":    ["weather", "temperature", "rain", "snow", "climate",
+                   "cold", "warm", "season", "humidity"],
 }
 
-# Neighborhoods known to the platform (used for fast name extraction)
-_KNOWN_NEIGHBORHOODS = [
+_KNOWN_NEIGHBORHOODS: List[str] = [
     "allston", "back bay", "beacon hill", "brighton", "charlestown", "chinatown",
     "dorchester", "east boston", "fenway", "hyde park", "jamaica plain", "kenmore",
     "mattapan", "mission hill", "north end", "roslindale", "roxbury", "south boston",
@@ -70,18 +92,14 @@ _KNOWN_NEIGHBORHOODS = [
     "revere", "chelsea", "watertown",
 ]
 
-# Intent routing map
 _INTENT_LABELS = {
-    "data_query":   "Single-domain SQL + RAG lookup",
-    "graph_query":  "Multi-domain / ranking / comparison query (Neo4j + Snowflake)",
-    "web_search":   "Outside platform coverage — live web search",
-    "report":       "Full neighborhood PDF report",
-    "chart":        "Data visualization request",
+    "data_query":  "Single-domain SQL + RAG lookup",
+    "graph_query": "Multi-domain / ranking / comparison query (Neo4j + Snowflake)",
+    "web_search":  "Outside platform coverage — live web search",
+    "report":      "Full neighborhood PDF report",
+    "chart":       "Data visualization request",
 }
 
-# ── Livability / comparison intent signals ────────────────────────────────────
-# Queries with these words + Boston geography → graph_query against internal data
-# (master scores, domain rankings) rather than web_search.
 _LIVABILITY_INTENT: List[str] = [
     "best", "worst", "top", "safest", "most affordable", "cheapest",
     "most walkable", "rank", "ranking", "compare", "comparison",
@@ -93,7 +111,6 @@ _LIVABILITY_INTENT: List[str] = [
     "worst neighborhood", "top neighborhood", "tell me about",
 ]
 
-# Boston geography signals — confirm a query is about the platform's coverage area
 _BOSTON_GEOGRAPHY: List[str] = [
     "boston", "cambridge", "somerville", "quincy", "brookline", "greater boston",
     "allston", "back bay", "beacon hill", "brighton", "charlestown", "chinatown",
@@ -104,7 +121,6 @@ _BOSTON_GEOGRAPHY: List[str] = [
     "area in boston", "district in boston", "live in boston",
 ]
 
-# Non-Boston geography — if present, domain keywords should NOT imply internal data
 _NON_BOSTON_CITIES: List[str] = [
     "new york", "nyc", "chicago", "los angeles", " la ", "seattle", "austin",
     "denver", "miami", "atlanta", "washington dc", "philadelphia", "san francisco",
@@ -112,7 +128,6 @@ _NON_BOSTON_CITIES: List[str] = [
     "san diego", "las vegas", "new orleans", "nashville", "charlotte",
 ]
 
-# Signals that the query wants current/external info regardless of domain words
 _WEB_ONLY_SIGNALS: List[str] = [
     "latest news", "breaking news", "news today", "this week's", "current events",
     "tonight", "this weekend", "schedule", "ticket", "event ",
@@ -148,35 +163,34 @@ app.add_middleware(
 # ══════════════════════════════════════════════════════════════════════════════
 
 class QueryRequest(BaseModel):
-    """User query request."""
     query: str = Field(..., description="Natural language query about Boston neighborhoods")
     domain_filter: Optional[str] = Field(
         None,
-        description="Force a specific domain tag (SAFETY, HOUSING, RESTAURANT, HEALTHCARE, "
-                    "SCHOOLS, GROCERY, TRANSIT, BLUEBIKES, WEATHER). Overrides auto-detection."
+        description=(
+            "Force a specific domain tag (SAFETY, HOUSING, RESTAURANT, HEALTHCARE, "
+            "SCHOOLS, GROCERY, TRANSIT, BLUEBIKES, WEATHER). Overrides auto-detection."
+        ),
     )
 
     class Config:
         json_schema_extra = {
-            "example": {
-                "query": "Is Allston safe and affordable?",
-                "domain_filter": None,
-            }
+            "example": {"query": "Is Allston safe and affordable?", "domain_filter": None}
         }
 
 
 class RoutingMeta(BaseModel):
-    """Routing decision metadata returned alongside every query."""
     detected_domains: List[str] = Field(..., description="All domains detected in the query")
     detected_neighborhoods: List[str] = Field(..., description="Neighborhood names found in the query")
     intent: str = Field(..., description="Routing intent: data_query | graph_query | web_search | report | chart")
     intent_description: str = Field(..., description="Human-readable reason for this routing decision")
     domain_override: bool = Field(False, description="True when domain_filter was supplied by caller")
-    fallback_used: Optional[str] = Field(None, description="Set when primary agent failed and a fallback was triggered, e.g. \'graph→data_query\'"  )
+    fallback_used: Optional[str] = Field(
+        None,
+        description="Set when primary agent failed and a fallback was triggered, e.g. 'graph→data_query'",
+    )
 
 
 class QueryResponse(BaseModel):
-    """Query response from router agent."""
     type: str = Field(..., description="Intent type: data_query, chart, image, web_search, report, graph_query")
     answer: str = Field(..., description="Synthesized answer")
     neighborhood: Optional[str] = Field(None, description="Primary detected neighborhood (if any)")
@@ -281,10 +295,7 @@ def run_query(query: str, conn):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def detect_domains(text: str, domain_filter: Optional[str] = None) -> List[str]:
-    """
-    Return canonical domain tags present in `text`.
-    If domain_filter is supplied it is returned as the sole domain (caller override).
-    """
+    """Return canonical domain tags present in text. domain_filter overrides detection."""
     if domain_filter:
         tag = domain_filter.upper()
         if tag in _DOMAIN_KEYWORDS:
@@ -292,66 +303,54 @@ def detect_domains(text: str, domain_filter: Optional[str] = None) -> List[str]:
         logger.warning(f"Unknown domain_filter '{domain_filter}' — ignoring override.")
 
     lower = text.lower()
-    found = []
-    for domain, keywords in _DOMAIN_KEYWORDS.items():
-        if any(kw in lower for kw in keywords):
-            found.append(domain)
-    return found
+    return [domain for domain, keywords in _DOMAIN_KEYWORDS.items()
+            if any(kw in lower for kw in keywords)]
 
 
 def detect_neighborhoods(text: str) -> List[str]:
-    """Return normalized neighborhood names found in `text`."""
+    """Return Title Case neighborhood names found in text."""
     lower = text.lower()
     return [n.title() for n in _KNOWN_NEIGHBORHOODS if n in lower]
 
 
 def _is_chart_request(text: str) -> bool:
-    chart_words = ["chart", "graph", "plot", "visualiz", "histogram", "bar chart", "pie chart", "map"]
-    lower = text.lower()
-    return any(w in lower for w in chart_words)
+    chart_words = ["chart", "graph", "plot", "visualiz", "histogram",
+                   "bar chart", "pie chart", "map"]
+    return any(w in text.lower() for w in chart_words)
 
 
 def _is_report_request(text: str) -> bool:
-    report_words = ["full report", "generate report", "pdf report", "neighborhood report", "comprehensive report"]
-    lower = text.lower()
-    return any(w in lower for w in report_words)
+    report_words = ["full report", "generate report", "pdf report",
+                    "neighborhood report", "comprehensive report"]
+    return any(w in text.lower() for w in report_words)
 
 
 def _is_boston_scoped(query: str) -> bool:
-    """True when the query is clearly about the Greater Boston / NeighbourWise coverage area."""
-    q = query.lower()
-    return any(k in q for k in _BOSTON_GEOGRAPHY)
+    return any(k in query.lower() for k in _BOSTON_GEOGRAPHY)
 
 
 def _is_non_boston(query: str) -> bool:
-    """True when the query explicitly names a city outside our coverage area."""
-    q = query.lower()
-    return any(c in q for c in _NON_BOSTON_CITIES)
+    return any(c in query.lower() for c in _NON_BOSTON_CITIES)
 
 
 def _has_livability_intent(query: str) -> bool:
-    """True when the query is asking to compare, rank, or choose between neighborhoods."""
-    q = query.lower()
-    return any(k in q for k in _LIVABILITY_INTENT)
+    return any(k in query.lower() for k in _LIVABILITY_INTENT)
 
 
 def _has_web_only_signal(query: str, detected_domains: List[str] = None) -> bool:
     """
-    True when the query genuinely needs live external data that internal DB cannot serve.
-
-    Rules (in order):
-      1. Hard phrases always → True  (news, apply-for, sports events, weather today)
-      2. WEATHER domain + time-sensitive word → True  (live forecast, not historical climate)
-      3. Event/schedule signal → True
+    True when the query needs live external data that the internal DB cannot serve.
+    Uses _WEB_ONLY_SIGNALS which is defined at module level.
     """
     q = query.lower()
     domains = detected_domains or []
 
-    if any(k in q for k in _WEB_ONLY_HARD):
+    if any(k in q for k in _WEB_ONLY_SIGNALS):
         return True
-    if "WEATHER" in domains and any(t in q for t in _WEATHER_TIME_WORDS):
-        return True
-    if any(k in q for k in _EVENT_SIGNALS):
+    # Live weather needs a web call even though WEATHER is a known domain
+    if "WEATHER" in domains and any(
+        t in q for t in ["today", "tonight", "forecast", "right now", "currently"]
+    ):
         return True
     return False
 
@@ -367,56 +366,29 @@ def determine_intent(
     1. report keywords                               → report
     2. chart/visualization keywords                  → chart
     3. Web-only signals (news, weather today, etc.)  → web_search
-       (overrides domain matches — these need live data)
-    4. Non-Boston city explicitly named + no
-       Boston geography present                      → web_search
-    5. Livability/comparison intent + Boston scope   → graph_query
-       (e.g. "best neighborhood", "compare Allston
-        and Brighton", "where should I live")
+    4. Non-Boston city named + no Boston geography   → web_search
+    5. Livability/comparison intent                  → graph_query
     6. 2+ domains detected                           → graph_query
     7. 1 domain detected                             → data_query
     8. Boston geography present (no domain/intent)   → graph_query
-       (e.g. "tell me about Dorchester" — use all-
-        domain profile from master scores)
     9. Nothing matches                               → web_search
-
-    Philosophy: web_search is the last resort, not the default for
-    zero-domain queries. The platform has rich data across 51 neighborhoods
-    and 9 domains — anything plausibly about Greater Boston livability
-    should be answered from internal data first.
     """
     if _is_report_request(query):
         return "report"
     if _is_chart_request(query):
         return "chart"
-
-    # Web-only signals always win — live data needed regardless of domain words
     if _has_web_only_signal(query, detected_domains):
         return "web_search"
-
-    # Query is about a non-Boston city with no local geography mentioned
     if _is_non_boston(query) and not _is_boston_scoped(query):
         return "web_search"
-
-    # Livability/comparison intent → always use internal data
-    # (platform is Boston-specific; "best neighborhood" = Boston by default)
     if _has_livability_intent(query):
         return "graph_query"
-
-    # Multi-domain explicit signals
     if len(detected_domains) >= 2:
         return "graph_query"
-
-    # Single domain
     if len(detected_domains) == 1:
         return "data_query"
-
-    # Boston geography present but no specific domain/intent
-    # → open-ended profile query, use graph with all domains
     if _is_boston_scoped(query):
         return "graph_query"
-
-    # Genuinely nothing to go on → web search
     return "web_search"
 
 
@@ -448,62 +420,58 @@ def _dispatch_data_query(query: str, domains: List[str], conn) -> Dict[str, Any]
 
 
 def _is_graph_answer_empty(result: Dict[str, Any]) -> bool:
-    """
-    Return True if the graph agent returned but produced no useful data —
-    e.g. Neo4j DNS failure, empty nodes, or the agent explicitly signals
-    it could not retrieve data.
-    """
+    """True if graph agent returned but produced no useful data (Neo4j failure etc)."""
     if result.get("error"):
         return True
     answer = result.get("answer", "")
-    # Phrases the graph agent emits when Neo4j is unreachable
     _failure_signals = [
-        "getaddrinfo failed",
-        "dns resolution error",
-        "connectivity error",
-        "graph data: ❌",
-        "graph unavailable",
-        "unable to retrieve",
-        "connection failed",
-        "database returned a dns",
+        "getaddrinfo failed", "dns resolution error", "connectivity error",
+        "graph data: ❌", "graph unavailable", "unable to retrieve",
+        "connection failed", "database returned a dns",
     ]
-    answer_lower = answer.lower()
-    return any(sig in answer_lower for sig in _failure_signals)
+    return any(sig in answer.lower() for sig in _failure_signals)
 
 
-def _dispatch_graph_query(query: str, domains: List[str], conn) -> Dict[str, Any]:
+def _dispatch_graph_query(
+    query: str,
+    domains: List[str],
+    conn,
+    neighborhood: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Multi-domain path: try Graph_agent (Neo4j fan-out) first.
+    Multi-domain path: call ask_graph_agent() directly (no HTTP round-trip).
+
+    Passes the pre-detected neighborhood so the graph agent doesn't need to
+    re-extract it, saving time and avoiding edge-case extraction mismatches.
 
     Fallback chain on failure:
-      1. ImportError or any runtime exception          → per-domain data_query calls
-      2. Graph agent returns but answer signals Neo4j  → per-domain data_query calls
-         DNS / connection failure
-      3. Only one domain survives fallback             → single data_query
+      1. ImportError or runtime exception  → per-domain data_query calls
+      2. Neo4j DNS / connection failure    → per-domain data_query calls
+      3. Single domain survives fallback   → single data_query
+      4. Multiple domains survive          → merged data_query answer
     """
     result: Dict[str, Any] = {}
 
-    # ── Try Graph_agent ──────────────────────────────────────────────────────
+    # ── Primary: ask_graph_agent (Neo4j + RAG + GPT-4o validator) ─────────────
     try:
-        from Graph_agent import run_graph_agent
-        result = run_graph_agent(query, domains=domains, conn=conn)
+        from Graph_agent import ask_graph_agent
+        result = ask_graph_agent(query, neighborhood=neighborhood)
     except ImportError:
         logger.warning("[graph] Graph_agent not importable — falling back to data_query")
-        result = {}
     except Exception as exc:
-        logger.warning(f"[graph] Graph_agent raised {type(exc).__name__}: {exc} — falling back to data_query")
-        result = {}
+        logger.warning(
+            f"[graph] Graph_agent raised {type(exc).__name__}: {exc} — falling back"
+        )
 
-    # ── Check for silent Neo4j failure in the returned answer ───────────────
     if result and not _is_graph_answer_empty(result):
-        return result  # ✅ graph succeeded
+        return result  # ✅ graph agent succeeded
 
     logger.warning(
         "[graph] Graph agent returned empty/failure answer — "
-        "falling back to parallel data_query across domains: %s", domains
+        "falling back to data_query across domains: %s", domains
     )
 
-    # ── Fallback: run one data_query per domain and merge answers ────────────
+    # ── Fallback: one data_query per domain, then merge ───────────────────────
     from router_agent import route
 
     sub_results: List[Dict[str, Any]] = []
@@ -513,10 +481,9 @@ def _dispatch_graph_query(query: str, domains: List[str], conn) -> Dict[str, Any
             if sub.get("answer"):
                 sub_results.append(sub)
         except Exception as exc:
-            logger.error(f"[graph-fallback] data_query for domain={domain} failed: {exc}")
+            logger.error(f"[graph-fallback] data_query domain={domain} failed: {exc}")
 
     if not sub_results:
-        # Nothing worked at all — return whatever the graph agent gave us
         return result or {"type": "error", "answer": "", "error": "All agents failed"}
 
     if len(sub_results) == 1:
@@ -525,49 +492,43 @@ def _dispatch_graph_query(query: str, domains: List[str], conn) -> Dict[str, Any
         merged["routing_fallback"] = "graph→data_query (single domain)"
         return merged
 
-    # Merge multiple domain answers into one coherent response
     combined_answer = "\n\n---\n\n".join(
         f"**{domains[i] if i < len(domains) else 'Domain'} Analysis**\n\n{r['answer']}"
         for i, r in enumerate(sub_results)
     )
-    merged_results = []
-    for r in sub_results:
-        if r.get("results"):
-            merged_results.extend(r["results"])
-    merged_rag = []
-    for r in sub_results:
-        if r.get("rag_chunks"):
-            merged_rag.extend(r["rag_chunks"])
+    merged_results = [row for r in sub_results for row in (r.get("results") or [])]
+    merged_rag     = [c   for r in sub_results for c   in (r.get("rag_chunks") or [])]
 
     return {
-        "type": "data_query",
-        "answer": combined_answer,
-        "neighborhood": sub_results[0].get("neighborhood"),
-        "domain": ", ".join(domains),
-        "results": merged_results or None,
-        "rag_chunks": merged_rag or None,
-        "sql": None,
-        "validation": sub_results[0].get("validation"),
-        "confidence": min(r.get("confidence", 0.0) for r in sub_results),
+        "type":             "data_query",
+        "answer":           combined_answer,
+        "neighborhood":     sub_results[0].get("neighborhood"),
+        "domain":           ", ".join(domains),
+        "results":          merged_results or None,
+        "rag_chunks":       merged_rag or None,
+        "sql":              None,
+        "validation":       sub_results[0].get("validation"),
+        "confidence":       min(r.get("confidence", 0.0) for r in sub_results),
         "routing_fallback": "graph→data_query (multi-domain merge)",
     }
 
 
 def _dispatch_web_search(query: str) -> Dict[str, Any]:
-    """Zero-domain path: invoke web_search_agent."""
+    """Zero-domain / external path: invoke web_search_agent."""
     try:
         from web_search_agent import search
         return search(query)
     except ImportError:
         from router_agent import route
         conn = get_snowflake_conn()
-        result = route(query, conn)
-        conn.close()
-        return result
+        try:
+            return route(query, conn)
+        finally:
+            conn.close()
 
 
 def _dispatch_chart(query: str, domains: List[str], conn) -> Dict[str, Any]:
-    """Chart intent: delegate to router_agent (it handles chart intent internally)."""
+    """Chart intent: delegate to router_agent (handles chart internally)."""
     from router_agent import route
     domain_hint = domains[0] if domains else None
     return route(query, conn, domain_filter=domain_hint)
@@ -614,27 +575,27 @@ async def root():
         "redoc": "/redoc",
         "endpoints": {
             "overview": {
-                "stats": "GET /overview/stats",
-                "safety": "GET /overview/safety",
-                "hotspots": "GET /overview/hotspots",
-                "master_scores": "GET /overview/master-scores",
-                "crime_narratives": "GET /overview/crime-narratives",
-                "choropleth": "GET /overview/choropleth",
+                "stats":             "GET /overview/stats",
+                "safety":            "GET /overview/safety",
+                "hotspots":          "GET /overview/hotspots",
+                "master_scores":     "GET /overview/master-scores",
+                "crime_narratives":  "GET /overview/crime-narratives",
+                "choropleth":        "GET /overview/choropleth",
             },
-            "query": "POST /query",
+            "query":         "POST /query",
             "neighborhoods": "GET /neighborhoods",
             "report": {
                 "generate": "POST /report/generate",
-                "status": "GET /report/{report_id}",
+                "status":   "GET /report/{report_id}",
                 "download": "GET /report/{report_id}/download",
-                "list": "GET /report",
+                "list":     "GET /report",
             },
-        }
+        },
     }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# OVERVIEW ENDPOINTS  (unchanged from original)
+# OVERVIEW ENDPOINTS
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/overview/stats", response_model=OverviewStats, tags=["Overview"])
@@ -701,10 +662,10 @@ async def get_safety_overview():
             "count": len(df),
             "data": [
                 {
-                    "neighborhood": row["NEIGHBORHOOD_NAME"].title(),
-                    "score": float(row["SAFETY_SCORE"]),
-                    "grade": row["SAFETY_GRADE"],
-                    "incidents": int(row["TOTAL_INCIDENTS"]),
+                    "neighborhood":  row["NEIGHBORHOOD_NAME"].title(),
+                    "score":         float(row["SAFETY_SCORE"]),
+                    "grade":         row["SAFETY_GRADE"],
+                    "incidents":     int(row["TOTAL_INCIDENTS"]),
                     "violent_crimes": int(row["VIOLENT_CRIME_COUNT"]),
                 }
                 for _, row in df.iterrows()
@@ -728,10 +689,10 @@ async def get_crime_hotspots():
             "count": len(df),
             "data": [
                 {
-                    "neighborhood": row["NEIGHBORHOOD_NAME"].title(),
-                    "clusters": int(row["N_HOTSPOT_CLUSTERS"]),
+                    "neighborhood":    row["NEIGHBORHOOD_NAME"].title(),
+                    "clusters":        int(row["N_HOTSPOT_CLUSTERS"]),
                     "crime_share_pct": float(row["HOTSPOT_CRIME_SHARE_PCT"]),
-                    "total_crimes": int(row["TOTAL_CRIMES"]),
+                    "total_crimes":    int(row["TOTAL_CRIMES"]),
                 }
                 for _, row in df.iterrows()
             ],
@@ -757,11 +718,11 @@ async def get_master_scores(limit: int = Query(51, ge=1, le=100)):
             "data": [
                 {
                     "neighborhood": row["NEIGHBORHOOD_NAME"].title(),
-                    "score": float(row["MASTER_SCORE"]),
-                    "grade": row["MASTER_GRADE"],
-                    "strength": row["TOP_STRENGTH"],
-                    "weakness": row["TOP_WEAKNESS"],
-                    "city": row["CITY"].title(),
+                    "score":        float(row["MASTER_SCORE"]),
+                    "grade":        row["MASTER_GRADE"],
+                    "strength":     row["TOP_STRENGTH"],
+                    "weakness":     row["TOP_WEAKNESS"],
+                    "city":         row["CITY"].title(),
                 }
                 for _, row in df.iterrows()
             ],
@@ -791,13 +752,13 @@ async def get_crime_narratives():
             "trend_summary": trend_counts,
             "data": [
                 {
-                    "neighborhood": row["NEIGHBORHOOD_NAME"].title(),
-                    "recent_trend": row["RECENT_TREND"],
+                    "neighborhood":       row["NEIGHBORHOOD_NAME"].title(),
+                    "recent_trend":       row["RECENT_TREND"],
                     "recent_avg_monthly": float(row["RECENT_AVG_MONTHLY"]),
-                    "forecast_month": str(row["FORECAST_MONTH"]),
-                    "forecasted_count": float(row["FORECASTED_COUNT"]),
-                    "mape": float(row["TRAIN_MAPE"]) if pd.notna(row["TRAIN_MAPE"]) else None,
-                    "hotspot_clusters": int(row["N_HOTSPOT_CLUSTERS"]),
+                    "forecast_month":     str(row["FORECAST_MONTH"]),
+                    "forecasted_count":   float(row["FORECASTED_COUNT"]),
+                    "mape":               float(row["TRAIN_MAPE"]) if pd.notna(row["TRAIN_MAPE"]) else None,
+                    "hotspot_clusters":   int(row["N_HOTSPOT_CLUSTERS"]),
                 }
                 for _, row in df.iterrows()
             ],
@@ -833,16 +794,15 @@ async def get_safety_choropleth():
                     "type": "Feature",
                     "geometry": geom,
                     "properties": {
-                        "neighborhood": row["NEIGHBORHOOD_NAME"].title(),
-                        "safety_score": float(row["SAFETY_SCORE"]),
-                        "safety_grade": row["SAFETY_GRADE"],
-                        "latitude": float(row["CENTROID_LAT"]),
-                        "longitude": float(row["CENTROID_LONG"]),
+                        "neighborhood":  row["NEIGHBORHOOD_NAME"].title(),
+                        "safety_score":  float(row["SAFETY_SCORE"]),
+                        "safety_grade":  row["SAFETY_GRADE"],
+                        "latitude":      float(row["CENTROID_LAT"]),
+                        "longitude":     float(row["CENTROID_LONG"]),
                     },
                 })
             except Exception as e:
                 logger.warning(f"Failed to parse geometry for {row['NEIGHBORHOOD_NAME']}: {e}")
-                continue
         return {"type": "FeatureCollection", "features": features}
     finally:
         conn.close()
@@ -864,7 +824,7 @@ async def list_neighborhoods():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# QUERY ENDPOINT  ← smart routing rebuilt here
+# QUERY ENDPOINT  ← smart routing
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/query", response_model=QueryResponse, tags=["Query"])
@@ -874,13 +834,17 @@ async def process_query(request: QueryRequest):
 
     **Routing logic (applied in this order):**
 
-    | Condition                              | Intent       | Agent invoked           |
-    |----------------------------------------|--------------|-------------------------|
-    | Query contains report keywords         | report       | report_agent            |
-    | Query contains chart/graph/plot keywords | chart      | router_agent (chart)    |
-    | 2+ domains detected in query           | graph_query  | Graph_agent (Neo4j fan-out) |
-    | Exactly 1 domain detected              | data_query   | router_agent (SQL + RAG)|
-    | No domain detected                     | web_search   | web_search_agent        |
+    | Condition                              | Intent       | Agent invoked              |
+    |----------------------------------------|--------------|----------------------------|
+    | Report keywords                        | report       | report_agent               |
+    | Chart / plot / visualization keywords  | chart        | router_agent (chart)       |
+    | Web-only signals (news, weather today) | web_search   | web_search_agent           |
+    | Non-Boston city, no local geography    | web_search   | web_search_agent           |
+    | Livability / comparison intent         | graph_query  | Graph_agent (ask_graph_agent) |
+    | 2+ domains detected                    | graph_query  | Graph_agent (ask_graph_agent) |
+    | 1 domain detected                      | data_query   | router_agent (SQL + RAG)   |
+    | Boston geography (no domain/intent)    | graph_query  | Graph_agent (ask_graph_agent) |
+    | Nothing matches                        | web_search   | web_search_agent           |
 
     Pass `domain_filter` to force a specific domain and skip auto-detection.
     The `routing` field in the response describes the decision taken.
@@ -902,17 +866,16 @@ async def process_query(request: QueryRequest):
     )
 
     logger.info(
-        f"[/query] Routing decision → intent={intent!r}  "
+        f"[/query] Routing → intent={intent!r}  "
         f"domains={detected_domains}  neighborhoods={detected_neighborhoods}"
     )
 
     # ── 2. Dispatch ───────────────────────────────────────────────────────────
-    conn = None
-    try:
-        result: Dict[str, Any] = {}
+    conn   = None
+    result: Dict[str, Any] = {}
 
+    try:
         if intent == "web_search":
-            # Web search agent does NOT need a Snowflake connection
             result = _dispatch_web_search(request.query)
 
         else:
@@ -925,9 +888,14 @@ async def process_query(request: QueryRequest):
                 result = _dispatch_chart(request.query, detected_domains, conn)
 
             elif intent == "graph_query":
-                result = _dispatch_graph_query(request.query, detected_domains, conn)
+                # Pass the first detected neighborhood to skip re-extraction
+                primary_neighborhood = detected_neighborhoods[0] if detected_neighborhoods else None
+                result = _dispatch_graph_query(
+                    request.query, detected_domains, conn,
+                    neighborhood=primary_neighborhood,
+                )
 
-            else:  # data_query (default)
+            else:  # data_query
                 result = _dispatch_data_query(request.query, detected_domains, conn)
 
     except Exception as e:
@@ -949,21 +917,30 @@ async def process_query(request: QueryRequest):
 
     elapsed = round(time.time() - t_start, 2)
 
-    # ── 3. Propagate any fallback info from agent result into routing_meta ─────
+    # ── 3. Propagate fallback info into routing_meta ──────────────────────────
     fallback = result.get("routing_fallback")
     if fallback:
         routing_meta.fallback_used = fallback
         logger.info(f"[/query] Fallback used: {fallback}")
 
     effective_type = result.get("type", intent)
-    logger.info(f"[/query] Completed in {elapsed}s  effective_type={effective_type!r}  fallback={fallback!r}")
+    logger.info(
+        f"[/query] Completed in {elapsed}s  "
+        f"effective_type={effective_type!r}  fallback={fallback!r}"
+    )
 
-    # ── 4. Normalise agent result into QueryResponse ───────────────────────────
+    # ── 4. Normalise into QueryResponse ───────────────────────────────────────
     return QueryResponse(
         type=effective_type,
         answer=result.get("answer", ""),
-        neighborhood=result.get("neighborhood") or (detected_neighborhoods[0] if detected_neighborhoods else None),
-        domain=result.get("domain") or (detected_domains[0] if detected_domains else None),
+        neighborhood=(
+            result.get("neighborhood")
+            or (detected_neighborhoods[0] if detected_neighborhoods else None)
+        ),
+        domain=(
+            result.get("domain")
+            or (detected_domains[0] if detected_domains else None)
+        ),
         domains=detected_domains,
         confidence=float(result.get("confidence", 0.0)),
         elapsed=elapsed,
@@ -989,18 +966,17 @@ def _generate_report_background(report_id: str, neighborhood: str, conn):
         logger.info(f"[Report {report_id}] Generating report for {neighborhood}")
         result = ask_report_agent(neighborhood, conn)
         if result and result.get("pdf_path"):
-            pdf_path = result["pdf_path"]
             reports_db[report_id].update({
-                "status": "completed",
-                "pdf_path": pdf_path,
-                "url": f"/report/{report_id}/download",
+                "status":       "completed",
+                "pdf_path":     result["pdf_path"],
+                "url":          f"/report/{report_id}/download",
                 "completed_at": datetime.utcnow().isoformat(),
-                "message": f"Report ready for {neighborhood}",
+                "message":      f"Report ready for {neighborhood}",
             })
-            logger.info(f"[Report {report_id}] Completed: {pdf_path}")
+            logger.info(f"[Report {report_id}] Completed: {result['pdf_path']}")
         else:
             reports_db[report_id].update({
-                "status": "failed",
+                "status":  "failed",
                 "message": result.get("error", "Report generation failed"),
             })
     except Exception as e:
@@ -1010,20 +986,22 @@ def _generate_report_background(report_id: str, neighborhood: str, conn):
 
 @app.post("/report/generate", response_model=ReportResponse, tags=["Report"])
 async def generate_report(request: ReportRequest, background_tasks: BackgroundTasks):
-    """Generate a comprehensive neighborhood report (async)."""
+    """Generate a comprehensive neighborhood report (runs asynchronously)."""
     report_id = str(uuid.uuid4())[:8]
     reports_db[report_id] = {
-        "report_id": report_id,
+        "report_id":    report_id,
         "neighborhood": request.neighborhood.title(),
-        "status": "pending",
-        "created_at": datetime.utcnow().isoformat(),
+        "status":       "pending",
+        "created_at":   datetime.utcnow().isoformat(),
         "completed_at": None,
-        "pdf_path": None,
-        "url": None,
-        "message": f"Report generation started for {request.neighborhood}",
+        "pdf_path":     None,
+        "url":          None,
+        "message":      f"Report generation started for {request.neighborhood}",
     }
     conn = get_snowflake_conn()
-    background_tasks.add_task(_generate_report_background, report_id, request.neighborhood, conn)
+    background_tasks.add_task(
+        _generate_report_background, report_id, request.neighborhood, conn
+    )
     return ReportResponse(**reports_db[report_id])
 
 
@@ -1040,10 +1018,10 @@ async def list_reports():
         "count": len(reports_db),
         "reports": [
             {
-                "report_id": rid,
+                "report_id":    rid,
                 "neighborhood": data["neighborhood"],
-                "status": data["status"],
-                "created_at": data["created_at"],
+                "status":       data["status"],
+                "created_at":   data["created_at"],
                 "completed_at": data.get("completed_at"),
             }
             for rid, data in reports_db.items()
@@ -1059,7 +1037,10 @@ async def download_report(report_id: str):
     if report_data["status"] != "completed":
         raise HTTPException(
             status_code=400,
-            detail=f"Report still {report_data['status']}. Check /report/{report_id} for status.",
+            detail=(
+                f"Report still {report_data['status']}. "
+                f"Check /report/{report_id} for status."
+            ),
         )
     pdf_path = report_data.get("pdf_path")
     if not pdf_path or not Path(pdf_path).exists():
@@ -1077,7 +1058,10 @@ async def download_report(report_id: str):
 
 @app.get("/404", tags=["Info"])
 async def not_found():
-    raise HTTPException(status_code=404, detail="Endpoint not found. Check /docs for valid endpoints.")
+    raise HTTPException(
+        status_code=404,
+        detail="Endpoint not found. Check /docs for valid endpoints.",
+    )
 
 
 if __name__ == "__main__":
