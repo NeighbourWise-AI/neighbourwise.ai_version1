@@ -29,6 +29,17 @@ Graph validator internals (ported from Graph_validator_agent.py — now SUPERSED
   _improve() GRAPH_QUERY branch     — MAX_RETRIES=2 loop, RateLimitError handling,
                                       per-category fix blocks, Cortex fallback
 
+Changes vs previous version:
+  FABRICATED_DATA rule in _gpt4o_validate_graph system prompt:
+    Added clarification that domain_metrics values ARE verified ground truth.
+    GPT-4o was incorrectly flagging correctly-cited figures (10449 incidents,
+    119 violent crimes, $1,218/sqft, 1,518 sqft) as fabricated because it
+    couldn't connect the domain_metrics JSON values to the queried neighborhood.
+    The new rule explicitly tells GPT-4o that domain_metrics belongs to the
+    queried neighborhood and formatted citations of those values are not
+    fabrications. Same clarification added to _improve() GRAPH_QUERY system
+    prompt so the regeneration Claude also knows which figures are authoritative.
+
 Usage:
     from universal_validator import UniversalValidator, AgentType
     validator = UniversalValidator(conn)
@@ -145,7 +156,7 @@ MIN_PDF_SIZE_KB     = 50
 
 EXPECTED_PERSPECTIVES = ["landmark", "residential", "transit", "food_nightlife"]
 
-# ── GPT-4o client (web search validation only) ────────────────────────────────
+# ── GPT-4o client (graph + web search validation) ─────────────────────────────
 _openai_client = None
 def _get_openai():
     global _openai_client
@@ -167,6 +178,7 @@ class UniversalValidator:
     def __init__(self, conn):
         """
         conn: active Snowflake connection from shared.snowflake_conn.get_conn()
+              Pass conn=None for graph_query — that path uses GPT-4o + Anthropic directly.
         """
         self.conn = conn
 
@@ -238,7 +250,6 @@ class UniversalValidator:
         if out_path:
             checks["output_file"] = self._check_file(out_path, MIN_CHART_SIZE_KB, "chart")
 
-        # Claude intent check — only on retry
         if ctx.get("attempt", 1) > 1 and sql:
             checks["claude_intent"] = self._claude_check_sql_intent(
                 user_query, sql, chart_type
@@ -275,18 +286,18 @@ class UniversalValidator:
         checks     = {}
 
         if checkpoint == "pre_fetch":
-            checks["neighborhood_exists"]    = self._check_neighborhood_exists(
+            checks["neighborhood_exists"] = self._check_neighborhood_exists(
                 ctx.get("neighborhood", "")
             )
-            checks["master_score_exists"]    = self._check_master_score_exists(
+            checks["master_score_exists"] = self._check_master_score_exists(
                 ctx.get("neighborhood", "")
             )
 
         elif checkpoint == "post_fetch":
-            checks["domain_scores"]  = self._check_domain_scores(ctx.get("data", {}))
-            checks["neighbor_data"]  = self._check_neighbor_data(ctx.get("neighbor_df"))
-            checks["crime_data"]     = self._check_crime_data(ctx.get("crime_df"))
-            checks["rag_results"]    = self._check_rag_results(ctx.get("rag_results", []))
+            checks["domain_scores"] = self._check_domain_scores(ctx.get("data", {}))
+            checks["neighbor_data"] = self._check_neighbor_data(ctx.get("neighbor_df"))
+            checks["crime_data"]    = self._check_crime_data(ctx.get("crime_df"))
+            checks["rag_results"]   = self._check_rag_results(ctx.get("rag_results", []))
 
         elif checkpoint == "post_build":
             checks["report_sections"]   = self._check_report_sections(
@@ -323,10 +334,6 @@ class UniversalValidator:
         checks["data_usage"] = self._check_data_usage(answer, sql_data)
         checks["format"]     = self._check_answer_format(answer)
 
-        # ── Hallucination check: skip when we have ANY grounded data ─────────
-        # SQL rows OR RAG chunks both count as grounded — if either returned
-        # data, the synthesis is anchored and hallucination risk is low.
-        # Only run the expensive Claude call when BOTH are empty.
         sql_results  = sql_data.get("results") or []
         rag_chunks   = (rag_data.get("chunks") or []) if rag_data else []
         has_any_data = bool(sql_results) or bool(rag_chunks)
@@ -347,38 +354,21 @@ class UniversalValidator:
     # Cross-model rule: Claude generates → GPT-4o validates
     # ══════════════════════════════════════════════════════════════════════════
     def _validate_graph_query(self, ctx: dict) -> dict[str, CheckResult]:
-        """
-        Validates the graph agent's Claude-generated answer against the
-        Neo4j graph context, Snowflake mart data, and RAG chunks that
-        were used to produce it.
+        checks     = {}
+        answer     = ctx.get("answer", "")
+        graph_ctx  = ctx.get("graph_ctx", {})
+        struct_ctx = ctx.get("struct_ctx", {})
+        rag_chunks = ctx.get("rag_chunks", [])
+        query      = ctx.get("query", "")
 
-        ctx keys:
-            query       : original user query
-            answer      : Claude's synthesised answer
-            graph_ctx   : Neo4j context dict (profile, top_by_domain, etc.)
-            struct_ctx  : Snowflake mart dict (housing, safety details)
-            rag_chunks  : list of RAG chunk dicts
-            neighborhood: neighborhood name (may be None)
-            domains     : list of detected domain strings
-        """
-        checks      = {}
-        answer      = ctx.get("answer", "")
-        graph_ctx   = ctx.get("graph_ctx", {})
-        struct_ctx  = ctx.get("struct_ctx", {})
-        rag_chunks  = ctx.get("rag_chunks", [])
-        query       = ctx.get("query", "")
-
-        # ── 1. Basic answer quality check (programmatic — no LLM cost) ────────
         checks["answer_quality"] = self._check_graph_answer_quality(answer)
 
-        # ── 2. GPT-4o cross-model validation against graph data ───────────────
         gpt4o = _get_openai()
         if gpt4o and os.environ.get("OPENAI_API_KEY"):
             checks["gpt4o_graph_validation"] = self._gpt4o_validate_graph(
                 query, answer, graph_ctx, struct_ctx, rag_chunks, gpt4o
             )
         else:
-            # Fallback: use Claude via Cortex if GPT-4o unavailable
             print("[Validator] No OPENAI_API_KEY — falling back to Claude for graph validation")
             checks["claude_graph_validation"] = self._claude_validate_graph(
                 query, answer, graph_ctx, struct_ctx
@@ -395,12 +385,10 @@ class UniversalValidator:
 
         lower = answer.lower()
 
-        # Must contain at least one numeric score reference
         import re as _re
         if not _re.search(r'\d+\.?\d*\s*/\s*100|\bscore\b.*\d+|\d+\s*(?:out of|/)\s*100', lower):
             issues.append("Answer contains no numeric score reference — may lack grounding")
 
-        # Must not claim data it couldn't have
         bad_phrases = ["according to google", "based on web", "i found online",
                        "internet search", "web results"]
         for phrase in bad_phrases:
@@ -418,16 +406,39 @@ class UniversalValidator:
         """
         Format Neo4j graph context, Snowflake mart data, and RAG chunks into
         a readable ground-truth block for GPT-4o graph validation.
-        Ported from Graph_validator_agent.py — uses larger truncation limits
-        (4000 / 2000 / 400) than the old inline approach (3000 / 1500 / 300).
+
+        verified_peer_scores and verified_detail_metrics are extracted from
+        graph_ctx and injected as plain-text sections BEFORE json.dumps —
+        otherwise json.dumps escapes their newlines (\n → \\n) making them
+        unreadable to GPT-4o as distinct lines.
         """
         parts = []
+
         if graph_ctx:
-            parts.append("=== GRAPH CONTEXT (ground truth — Neo4j) ===")
-            parts.append(json.dumps(graph_ctx, indent=2, default=str)[:4000])
+            # Extract plain-text sections before JSON serialization so their
+            # newlines are preserved as real newlines, not \n escape sequences.
+            # Use a shallow copy so pop() doesn't mutate the caller's dict.
+            graph_ctx       = dict(graph_ctx)
+            peer_scores     = graph_ctx.pop("verified_peer_scores", "")
+            detail_metrics  = graph_ctx.pop("verified_detail_metrics", "")
+
+            if detail_metrics:
+                parts.append("=== VERIFIED DETAIL METRICS (queried neighborhood — authoritative) ===")
+                parts.append(detail_metrics)
+
+            if peer_scores:
+                parts.append("\n=== VERIFIED PEER SCORES (all neighborhoods, all queried domains) ===")
+                parts.append(peer_scores)
+
+            # Remaining graph_ctx (authoritative_scores etc.) as JSON
+            if graph_ctx:
+                parts.append("\n=== GRAPH CONTEXT (scores + grades) ===")
+                parts.append(json.dumps(graph_ctx, indent=2, default=str)[:2000])
+
         if struct_ctx:
             parts.append("\n=== STRUCTURED MART DATA (ground truth — Snowflake) ===")
             parts.append(json.dumps(struct_ctx, indent=2, default=str)[:2000])
+
         if rag_chunks:
             parts.append("\n=== RAG CHUNKS (available unstructured context) ===")
             for i, c in enumerate(rag_chunks[:3], 1):
@@ -436,6 +447,7 @@ class UniversalValidator:
                     f"| Score: {c.get('hybrid_score', 0):.3f}\n"
                     f"{str(c.get('chunk_text',''))[:400]}"
                 )
+
         return "\n".join(parts) if parts else "No source data."
 
     def _gpt4o_validate_graph(
@@ -449,16 +461,6 @@ class UniversalValidator:
     ) -> CheckResult:
         """
         GPT-4o validates Claude's graph answer against the actual source data.
-
-        Validation criteria (ported from Graph_validator_agent.py):
-          1. SCORE_ERRORS      — cited scores that don't match graph/mart data
-          2. GRADE_ERRORS      — incorrect grade labels
-          3. FABRICATED_DATA   — invented neighborhoods, scores, or facts
-          4. MISSING_INSIGHTS  — important queried-domain data that was ignored
-             ↳ CRITICAL SCOPING RULE: only flag domains the query asked about
-          5. COMPARISON_ERRORS — wrong scores used for comparison neighborhoods
-          6. RICHNESS_ISSUES   — response too short, no direct answer, ignores RAG
-
         Cross-model rule: Claude generates → GPT-4o validates (never same model).
         """
         GRAPH_PASS_THRESHOLD = 75
@@ -467,8 +469,6 @@ class UniversalValidator:
             graph_ctx, struct_ctx, rag_chunks
         )
 
-        # Full system prompt ported from Graph_validator_agent.py —
-        # includes the CRITICAL SCOPING RULE and exact deduction table.
         system_prompt = f"""You are a strict quality-control validator for NeighbourWise AI,
 a Greater Boston neighborhood livability analysis system.
 
@@ -490,6 +490,18 @@ Check for exactly these six issues:
    Neighborhoods, scores, incident counts, prices, or relationships that
    appear in the draft but are NOT present anywhere in the provided context.
    This is the most serious issue — flag every invented fact.
+
+   IMPORTANT — domain_metrics are verified ground truth for the queried neighborhood:
+   The GRAPH CONTEXT contains a "domain_metrics" list with verified detail figures
+   for the queried neighborhood. These values ARE authoritative ground truth:
+     - total_incidents, violent_crime_count, property_crime_count (Safety domain)
+     - avg_price_per_sqft, avg_living_area_sqft, avg_estimated_rent (Housing domain)
+     - total_stops, total_stations, total_restaurants, total_schools, etc.
+   If the draft cites these values — even with formatting differences such as
+   currency symbols, commas, rounding, or unit labels (e.g. "10,449 incidents"
+   from 10449, "$1,218/sqft" from 1218.3, "1,518 sq ft" from 1518) — do NOT
+   flag them as fabricated. Only flag figures that have NO match anywhere in
+   the provided context, including domain_metrics.
 
 4. MISSING_INSIGHTS
    Important data points that Claude ignored — but ONLY for the domains
@@ -574,12 +586,10 @@ FAIL if score < {GRAPH_PASS_THRESHOLD} OR any fabricated data exists."""
                 status=status,
                 issues=all_issues,
                 details={
-                    "score":              score,
-                    # Store under both keys — _improve() reads "fix_instructions",
-                    # validate_graph_output() callers may read "regeneration_prompt"
-                    "fix_instructions":   result.get("regeneration_prompt", ""),
+                    "score":               score,
+                    "fix_instructions":    result.get("regeneration_prompt", ""),
                     "regeneration_prompt": result.get("regeneration_prompt", ""),
-                    "raw_issues":         result.get("issues", {}),
+                    "raw_issues":          result.get("issues", {}),
                 },
             )
 
@@ -696,8 +706,8 @@ Reply ONLY: NO ISSUES or LIST_ISSUES: [brief list of problems found]"""
     def _check_data_shape(
         self, df: pd.DataFrame, chart_type: str, user_query: str
     ) -> CheckResult:
-        issues = []
-        n      = len(df)
+        issues  = []
+        n       = len(df)
         is_time = chart_type in {"line", "multi_line"}
 
         if n == 0:
@@ -937,21 +947,16 @@ Reply ONLY: NO ISSUES or LIST_ISSUES: [brief list of problems found]"""
         return CheckResult(status=FAIL if issues else PASS, issues=issues)
 
     def _check_answer_format(self, answer: str) -> CheckResult:
-            issues = []
-            lower  = answer.lower()
+        issues = []
+        lower  = answer.lower()
 
-            if "summary" not in lower[:300]:
-                issues.append("Missing ### Summary section")
+        if "summary" not in lower[:300]:
+            issues.append("Missing ### Summary section")
 
-            if "insight" not in lower:
-                issues.append("Missing ### Insights section")
+        if "insight" not in lower:
+            issues.append("Missing ### Insights section")
 
-            # Note: no table check — synthesis prompt writes prose, not tables.
-            # A missing table is not an error.
-
-            # WARN not FAIL — missing a section header is cosmetic, not a data error.
-            # FAIL would trigger a full Claude rewrite (+8s) for a cosmetic issue.
-            return CheckResult(status=WARN if issues else PASS, issues=issues)
+        return CheckResult(status=WARN if issues else PASS, issues=issues)
 
     # ══════════════════════════════════════════════════════════════════════════
     # LLM CHECKS (Claude via Cortex — validates Mistral output)
@@ -1153,9 +1158,8 @@ Respond ONLY with JSON:
         client,
     ) -> CheckResult:
         """
-        Full domain-scoped GPT-4o validation — matches validator_agent.py exactly.
+        Full domain-scoped GPT-4o validation for web search answers.
         Checks 4 categories: hallucinations, missing_alerts, citation_gaps, richness_issues.
-        Includes CRITICAL SCOPING RULES so GPT-4o never penalises correct omissions.
         """
         PASS_THRESHOLD = 75
         system_prompt  = f"""You are a quality-control validator for NeighbourWise AI, \
@@ -1265,21 +1269,13 @@ Respond ONLY with valid JSON. No prose. Schema:
             struct_ctx = context.get("struct_ctx", {})
             rag_chunks = context.get("rag_chunks", [])
 
-            # Extract fix instructions from GPT-4o check (stored as
-            # "fix_instructions" in CheckResult.details — see _gpt4o_validate_graph)
-            fix_instr = ""
+            fix_instr  = ""
+            raw_issues = {}
             for c in checks.values():
                 if c.details.get("fix_instructions"):
                     fix_instr = c.details["fix_instructions"]
-                    break
-
-            # Build per-category fix block from raw GPT-4o issues —
-            # matches regenerate_output() in Graph_validator_agent.py
-            raw_issues = {}
-            for c in checks.values():
                 if c.details.get("raw_issues"):
                     raw_issues = c.details["raw_issues"]
-                    break
 
             issue_labels = {
                 "score_errors":      "Score errors to fix",
@@ -1298,13 +1294,11 @@ Respond ONLY with valid JSON. No prose. Schema:
                         fix_lines.append(f"  - {item}")
             fix_block = "\n".join(fix_lines) if fix_lines else issue_str or "General quality improvements needed."
 
-            # Rebuild ground-truth context using the same helper as validation
-            # (same 4000/2000/400 limits — consistent with Graph_validator_agent.py)
             ground_truth = self._build_graph_validation_context(
                 graph_ctx, struct_ctx, rag_chunks
             )
 
-            # System prompt ported from REGEN_SYSTEM_PROMPT in Graph_validator_agent.py
+            # ── PATCHED: clarify domain_metrics so Claude doesn't second-guess them ──
             system_prompt = (
                 "You are the NeighbourWise AI graph agent for Greater Boston "
                 "neighborhood livability analysis. You previously generated a response "
@@ -1314,9 +1308,12 @@ Respond ONLY with valid JSON. No prose. Schema:
                 "- Use ONLY the data provided in the context — do not invent scores, grades, or facts\n"
                 "- Quote exact scores and grades from the graph/mart data "
                 "(e.g. \"Safety score 50.3, GOOD grade\")\n"
+                "- The GROUND TRUTH CONTEXT contains a 'VERIFIED DETAIL METRICS' section with lines "
+                "like 'Back Bay Safety: total_incidents=10449, violent_crime_count=119'. "
+                "These ARE authoritative — cite them freely using normal formatting "
+                "(e.g. '10,449 incidents' from 10449, '$1,218/sqft' from 1218.3).\n"
                 "- Keep response between 300–500 words\n"
-                "- End with: \"Sources: [graph] [structured mart] [RAG chunks]\" "
-                "listing which contributed\n"
+                "- End with: \"Sources: [graph] [RAG chunks]\" listing which contributed\n"
                 "- Do NOT copy the previous draft — write fresh from the context"
             )
             user_msg = (
@@ -1328,15 +1325,13 @@ Respond ONLY with valid JSON. No prose. Schema:
                 f"Write a fully corrected response now."
             )
 
-            # Retry loop: up to MAX_RETRIES=2 attempts with RateLimitError handling
-            # — matches regenerate_output() retry behaviour in Graph_validator_agent.py
-            _MAX_RETRIES  = 2
-            _RETRY_DELAY  = 2   # seconds between attempts
+            _MAX_RETRIES = 2
+            _RETRY_DELAY = 2
             import anthropic as _anthropic
             import time as _time
             _client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 
-            for attempt in range(1, _MAX_RETRIES + 2):  # attempts 1..3
+            for attempt in range(1, _MAX_RETRIES + 2):
                 try:
                     resp = _client.messages.create(
                         model="claude-sonnet-4-6",
@@ -1361,7 +1356,6 @@ Respond ONLY with valid JSON. No prose. Schema:
                           f"— falling back to Cortex")
                     break
 
-            # Cortex fallback (no RateLimitError, just a soft degradation)
             prompt = f"{system_prompt}\n\n{user_msg}"
             return cortex_complete(prompt, self.conn, model=MODEL_VALIDATE)
 
@@ -1407,8 +1401,7 @@ Improved answer:"""
             query          = context.get("query", "")
             domain         = context.get("domain", "All")
 
-            # Extract per-category issues from the GPT-4o check details
-            raw_issues = {}
+            raw_issues   = {}
             regen_prompt = ""
             for c in checks.values():
                 if c.details.get("raw_issues"):
@@ -1421,7 +1414,6 @@ Improved answer:"""
             citation_gaps   = raw_issues.get("citation_gaps",   [])
             richness_issues = raw_issues.get("richness_issues", [])
 
-            # Build structured per-category fix blocks (matches validator_agent.py)
             fix_blocks = []
             if hallucinations:
                 fix_blocks.append(
@@ -1445,8 +1437,7 @@ Improved answer:"""
                 )
 
             fix_section = "\n\n".join(fix_blocks) if fix_blocks else "General quality improvement."
-
-            domain_ctx = (
+            domain_ctx  = (
                 f'This query is about the "{domain}" domain of neighborhood livability.'
                 if domain != "All" else "This query covers neighborhood livability."
             )
@@ -1488,8 +1479,6 @@ RAW SEARCH CONTEXT (your only allowed source of facts):
 
 Write the corrected response now."""
 
-            # Use direct Anthropic call with retry (not Cortex) to match
-            # web_search_agent.py which uses Claude directly
             try:
                 import anthropic as _anthropic
                 import time as _time
@@ -1513,10 +1502,11 @@ Write the corrected response now."""
                             raise
             except Exception as e:
                 print(f"[Validator] Web search improve via Claude failed ({e}) — using Cortex fallback")
-                prompt = f"{system_prompt}\n\nQUERY: {query}\n\nPREVIOUS DRAFT:\n{draft[:2000]}\n\nISSUES:\n{fix_section}\n\nSOURCES:\n{search_context[:2000]}\n\nCorrected response:"
+                prompt = (f"{system_prompt}\n\nQUERY: {query}\n\nPREVIOUS DRAFT:\n{draft[:2000]}"
+                          f"\n\nISSUES:\n{fix_section}\n\nSOURCES:\n{search_context[:2000]}"
+                          f"\n\nCorrected response:")
                 return cortex_complete(prompt, self.conn, model=MODEL_VALIDATE)
 
-        # For graphic/report agents — improvement happens at agent level
         return ""
 
 
@@ -1544,10 +1534,7 @@ def validate_and_improve(
         "answer":   result.result if result.result else draft_answer,
         "feedback": {
             "checks": {
-                name: {
-                    "status": c.status,
-                    "issues": c.issues,
-                }
+                name: {"status": c.status, "issues": c.issues}
                 for name, c in result.checks.items()
             },
             "needs_improvement": not result.passed,
@@ -1571,22 +1558,9 @@ def validate_graph_output(
 ) -> dict:
     """
     Convenience wrapper for validating graph agent output via UniversalValidator.
-
-    Unlike validate_and_improve() which needs a Snowflake conn, this function
-    passes a None conn — safe because the GRAPH_QUERY path uses GPT-4o / direct
+    Passes conn=None — safe because the GRAPH_QUERY path uses GPT-4o + direct
     Anthropic and never calls cortex_complete() for its primary checks.
-
-    Returns the same feedback dict shape as validate_and_improve():
-        {
-            "answer":   str,        # improved answer (or original if passed)
-            "feedback": dict,       # checks, needs_improvement, all_issues
-            "improved": bool,
-            "draft":    str,
-        }
     """
-    # UniversalValidator accepts conn=None safely for GRAPH_QUERY agent type
-    # because _validate_graph_query uses GPT-4o, and _improve GRAPH_QUERY
-    # uses direct Anthropic — neither requires self.conn
     validator = UniversalValidator(conn=None)
     ctx = {
         "query":        query,
