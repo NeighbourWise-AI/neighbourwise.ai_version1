@@ -123,6 +123,9 @@ _LIVABILITY_SIGNALS = [
     "pros and cons", "worth living", "family friendly", "recommend",
     "where should i", "is it worth", "how is", "what is it like",
     "tell me about",
+    # comparison signals — if not caught by chart keywords above
+    "difference between", "better for", "which is better",
+    "which neighborhood", "between", "or roxbury", "or back bay",
 ]
 
 # Graph relationship signals — always graph_query
@@ -178,7 +181,9 @@ def _keyword_classify(query: str) -> Optional[dict]:
     if any(k in q for k in ["chart", "plot", "scatter", "trend",
                               "over time", "monthly", "rank all", "top 10",
                               "top 5", "correlation", "breakdown", "percentage",
-                              "vs ", "versus"]):
+                              "vs ", "versus", "compare", "comparison",
+                              "side by side", "across all domains",
+                              "across domains", "all domains"]):
         return {"intent": "chart", "neighborhood": nbhd,
                 "domain": None, "confidence": 0.85,
                 "reasoning": "keyword: chart"}
