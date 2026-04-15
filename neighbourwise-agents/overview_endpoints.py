@@ -40,7 +40,7 @@ Table name reference (all single-u NEIGHBORHOOD confirmed):
   CRIME_ANALYSIS.CA_CRIME_SAFETY_NARRATIVE
   CRIME_ANALYSIS.CA_CRIME_FORECAST
   CRIME_ANALYSIS.CA_CRIME_HOTSPOT_CLUSTERS
-  CRIME_ANALYSIS.GA_GROCERY_HOTSPOT_CLUSTERS
+  GROCERY_ANALYSIS.GA_GROCERY_HOTSPOT_CLUSTERS
   HEALTHCARE_ANALYSIS.HA_HEALTHCARE_ACCESS_PROFILE
   HEALTHCARE_ANALYSIS.HA_HEALTHCARE_HOTSPOT_CLUSTERS
 """
@@ -142,6 +142,77 @@ async def list_neighborhoods():
     finally:
         conn.close()
 
+@router.get("/neighbors/{neighborhood}")
+async def get_neighbors(neighborhood: str, limit: int = Query(8, ge=3, le=15)):
+    """
+    Returns the N geographically closest neighborhoods to the given one,
+    using ST_DISTANCE on CENTROID_LAT/CENTROID_LONG from MASTER_LOCATION.
+    Includes master scores for comparison chart.
+    """
+    conn = _get_conn()
+    try:
+        safe = neighborhood.replace("'", "''").upper()
+
+        # Get the selected neighborhood's centroid
+        df_target = _run(f"""
+            SELECT CENTROID_LAT, CENTROID_LONG
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MASTER_LOCATION
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
+              AND GRANULARITY = 'NEIGHBORHOOD'
+            LIMIT 1
+        """, conn)
+
+        if df_target.empty:
+            raise HTTPException(status_code=404, detail=f"Neighborhood '{neighborhood}' not found")
+
+        lat = float(df_target.iloc[0]["CENTROID_LAT"])
+        lng = float(df_target.iloc[0]["CENTROID_LONG"])
+
+        # Find N closest neighbors by straight-line distance, join master scores
+        df = _run(f"""
+            SELECT
+                ml.NEIGHBORHOOD_NAME,
+                ml.CITY,
+                ml.CENTROID_LAT,
+                ml.CENTROID_LONG,
+                ROUND(
+                    ST_DISTANCE(
+                        ST_MAKEPOINT({lng}, {lat}),
+                        ST_MAKEPOINT(ml.CENTROID_LONG, ml.CENTROID_LAT)
+                    ) / 1000, 2
+                ) AS distance_km,
+                ms.MASTER_SCORE,
+                ms.MASTER_GRADE,
+                ms.TOP_STRENGTH,
+                ms.TOP_WEAKNESS
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MASTER_LOCATION ml
+            LEFT JOIN NEIGHBOURWISE_DOMAINS.ANALYTICS.NEIGHBORHOOD_MASTER_SCORE ms
+                ON ml.LOCATION_ID = ms.LOCATION_ID
+            WHERE UPPER(ml.NEIGHBORHOOD_NAME) != '{safe}'
+              AND ml.GRANULARITY = 'NEIGHBORHOOD'
+              AND ml.CENTROID_LAT IS NOT NULL
+              AND UPPER(ml.NEIGHBORHOOD_NAME) != 'HARBOR ISLANDS'
+            ORDER BY distance_km ASC
+            LIMIT {limit}
+        """, conn)
+
+        return {
+            "neighborhood": _title(neighborhood),
+            "neighbors": [
+                {
+                    "neighborhood": _title(r["NEIGHBORHOOD_NAME"]),
+                    "city":         _title(r["CITY"]),
+                    "distance_km":  _f(r["DISTANCE_KM"]),
+                    "master_score": _f(r["MASTER_SCORE"]),
+                    "master_grade": _s(r, "MASTER_GRADE"),
+                    "top_strength": _s(r, "TOP_STRENGTH"),
+                    "top_weakness": _s(r, "TOP_WEAKNESS"),
+                }
+                for _, r in df.iterrows()
+            ]
+        }
+    finally:
+        conn.close()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # KPI CARDS
@@ -667,7 +738,7 @@ async def domain_grocery(neighborhood: Optional[str] = Query(None)):
         df_hotspots = _run(f"""
             SELECT NEIGHBORHOOD_NAME, TOTAL_STORES, N_STORE_CLUSTERS,
                    CLUSTERED_STORE_SHARE_PCT, ISOLATED_STORE_PCT, ACCESS_TIER
-            FROM NEIGHBOURWISE_DOMAINS.CRIME_ANALYSIS.GA_GROCERY_HOTSPOT_CLUSTERS
+            FROM NEIGHBOURWISE_DOMAINS.GROCERY_ANALYSIS.GA_GROCERY_HOTSPOT_CLUSTERS
             WHERE 1=1 {hc}
             ORDER BY CLUSTERED_STORE_SHARE_PCT DESC
         """, conn)
