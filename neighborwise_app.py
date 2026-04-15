@@ -80,9 +80,12 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.2rem;
 }
 .metric-value {
-    font-family: 'DM Serif Display', serif; font-size: 1.5rem;
-    color: #e2e8f0; line-height: 1.15;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: 'DM Serif Display', serif; font-size: 1.2rem;
+    color: #e2e8f0; line-height: 1.2;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
 }
 .metric-sub { font-size: 0.7rem; color: rgba(255,255,255,0.35); margin-top: 0.15rem; }
 
@@ -179,7 +182,7 @@ def api_get(path: str, params: dict = None) -> dict:
         return {}
 
 
-def api_post(path: str, payload: dict = None, timeout: int = 300) -> dict:
+def api_post(path: str, payload: dict = None, timeout: int = 30) -> dict:
     """POST request to FastAPI. Returns {} on error."""
     try:
         r = requests.post(f"{API_BASE_URL}{path}", json=payload, timeout=timeout)
@@ -221,6 +224,13 @@ def load_domain(domain: str, neighborhood: str = None):
     params = {"neighborhood": neighborhood} if neighborhood and neighborhood != "ALL" else {}
     return api_get(f"/overview/domain/{domain.lower()}", params=params)
 
+@st.cache_data(ttl=3600)
+def load_domain_matrix(neighborhood: str = None, limit: int = 20):
+    params = {}
+    if neighborhood and neighborhood != "ALL":
+        params["neighborhood"] = neighborhood
+    params["limit"] = limit
+    return api_get("/overview/domain-matrix", params=params)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
@@ -448,15 +458,27 @@ with tab_overview:
     n_dec = trend_summary.get("decreasing", {}).get("neighborhood_count", 0)
     n_stable = trend_summary.get("stable", {}).get("neighborhood_count", 0)
 
-    best_transit_name = transit_list[0]["neighborhood"] if transit_list else "—"
-    best_transit_score = transit_list[0]["score"] if transit_list else "—"
+    transit_sorted_kpi = sorted(
+        transit_list,
+        key=lambda x: (x.get("score", 0) or 0, x.get("total_routes", 0) or 0),
+        reverse=True
+    )
+    best_transit_name  = transit_sorted_kpi[0]["neighborhood"] if transit_sorted_kpi else "—"
+    best_transit_lines = transit_sorted_kpi[0].get("rapid_transit_lines") if transit_sorted_kpi else None
+    transit_sub = best_transit_lines if best_transit_lines else "Bus network only"
+
+    # Get rapid transit lines for best transit
+    best_transit_lines = transit_list[0].get("rapid_transit_lines") if transit_list else None
+    transit_sub = best_transit_lines if best_transit_lines else "Bus network only"
+    total = n_inc + n_dec + n_stable
+    safer_pct = round((n_dec + n_stable) / total * 100) if total > 0 else 0
 
     render_metric_cards([
-        ("Neighborhoods",        51 if not hood_filter else "1",   "Boston · Cambridge · Suburbs"),
-        ("Safest",               safest_name,                       f"Safety score: {safest_score}"),
-        ("Most Affordable",      afford_name,                       afford_sub),
-        ("Best Transit",         best_transit_name,                 f"Transit score: {best_transit_score}"),
-        ("Crime Trend",          f"📈{n_inc} · 📉{n_dec}",         f"{n_stable} stable neighborhoods"),
+        ("Neighborhoods",     51 if not hood_filter else "1",  "Boston · Cambridge · Suburbs"),
+        ("Safest",            safest_name,                      f"Grade: {safest_list[0].get('grade', '—')} · Lowest crime rate"),
+        ("Most Affordable",   afford_name,                      afford_sub),
+        ("Best Transit",      best_transit_name,                transit_sub[:60] if transit_sub else "Excellent coverage"),
+        ("Crime Trend", f"{safer_pct}% holding steady", f"📉 {n_dec} improving · ➡️ {n_stable} stable · 📈 {n_inc} rising"),
     ])
 
     # ── Mode 1: ALL domain — show map + top-10 KPI charts ────────────────────
@@ -524,37 +546,64 @@ with tab_overview:
         with col_safe:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.markdown(
-                '<div class="section-title">Safest Neighborhoods — Top 10</div>'
-                '<div class="section-subtitle">Score 0–100 · Crime density + violent % + trends</div>',
+                '<div class="section-title">Safety Grade Distribution</div>'
+                '<div class="section-subtitle">All 50 neighborhoods · How Boston stacks up on safety</div>',
                 unsafe_allow_html=True,
             )
             if safest_list:
-                df_safe = pd.DataFrame(safest_list)
-                bars = alt.Chart(df_safe).mark_bar(
-                    cornerRadiusTopRight=5, cornerRadiusBottomRight=5,
-                ).encode(
-                    y=alt.Y("neighborhood:N", sort=None,
-                            axis=alt.Axis(title=None, labelFontSize=11,
-                                          labelLimit=180, labelFontWeight="bold")),
-                    x=alt.X("score:Q", scale=alt.Scale(domain=[0, 100]),
-                            axis=alt.Axis(title="Safety Score", grid=True, tickCount=5)),
-                    color=alt.Color("grade:N",
-                                    scale=alt.Scale(
-                                        domain=["EXCELLENT", "GOOD", "MODERATE", "HIGH CONCERN"],
-                                        range=["#1E8449", "#82E0AA", "#F1C40F", "#C0392B"]),
-                                    legend=alt.Legend(title="Grade", orient="bottom",
-                                                      direction="horizontal")),
-                    tooltip=["neighborhood:N", alt.Tooltip("score:Q", format=".1f"), "grade:N"],
-                )
-                labels = alt.Chart(df_safe).mark_text(
-                    align="left", dx=4, fontSize=11, fontWeight="bold", color="#e2e8f0",
-                ).encode(
-                    y=alt.Y("neighborhood:N", sort=None),
-                    x=alt.X("score:Q"),
-                    text=alt.Text("score:Q", format=".0f"),
-                )
-                st.altair_chart(alt.layer(bars, labels).properties(height=500),
-                                use_container_width=True)
+                # Build grade distribution from full KPI data
+                domain_safety = load_domain("safety", hood_filter)
+                all_scores = domain_safety.get("scores", [])
+                if all_scores:
+                    df_all = pd.DataFrame(all_scores)
+                    grade_counts = df_all["safety_grade"].value_counts().reset_index()
+                    grade_counts.columns = ["Grade", "Count"]
+
+                    grade_order = ["EXCELLENT", "GOOD", "MODERATE", "HIGH CONCERN"]
+                    grade_colors = ["#1E8449", "#82E0AA", "#F1C40F", "#C0392B"]
+
+                    donut = alt.Chart(grade_counts).mark_arc(
+                        innerRadius=70, outerRadius=130,
+                        stroke="#1a1a2e", strokeWidth=2,
+                    ).encode(
+                        theta=alt.Theta("Count:Q", stack=True),
+                        color=alt.Color("Grade:N",
+                            scale=alt.Scale(domain=grade_order, range=grade_colors),
+                            legend=alt.Legend(title=None, orient="bottom",
+                                            direction="horizontal", labelFontSize=12)),
+                        order=alt.Order("Count:Q", sort="descending"),
+                        tooltip=[
+                            alt.Tooltip("Grade:N", title="Grade"),
+                            alt.Tooltip("Count:Q", title="Neighborhoods"),
+                        ],
+                    )
+                    # Add percentage to grade_counts
+                    grade_counts["Pct"] = (grade_counts["Count"] / grade_counts["Count"].sum() * 100).round(0).astype(int).astype(str) + "%"
+
+                    labels = alt.Chart(grade_counts).mark_text(
+                        radius=155, fontSize=14, fontWeight="bold", color="#e2e8f0",
+                    ).encode(
+                        theta=alt.Theta("Count:Q", stack=True),
+                        order=alt.Order("Count:Q", sort="descending"),
+                        text=alt.Text("Pct:N"),
+                    )
+                    # Top 3 safest as mini list below donut
+                    top3 = safest_list[:3]
+                    st.altair_chart(
+                        alt.layer(donut, labels).properties(height=380, width=380),
+                        use_container_width=True,
+                    )
+                    st.markdown('<div style="margin-top:8px;">', unsafe_allow_html=True)
+                    for i, n in enumerate(top3):
+                        medal = ["🥇", "🥈", "🥉"][i]
+                        st.markdown(
+                            f'<div style="display:flex;justify-content:space-between;'
+                            f'padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">'
+                            f'<span style="color:#e2e8f0;font-size:13px;">{medal} {n["neighborhood"]}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    st.markdown('</div>', unsafe_allow_html=True)
             else:
                 st.info("Safety data not available.")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -572,7 +621,7 @@ with tab_overview:
             if affordable_list:
                 df_afford = pd.DataFrame(affordable_list)
                 bars = alt.Chart(df_afford).mark_bar(
-                    cornerRadiusTopRight=5, cornerRadiusBottomRight=5, color="#52b788",
+                    cornerRadiusTopRight=5, cornerRadiusBottomRight=5,
                 ).encode(
                     y=alt.Y("neighborhood:N", sort=None,
                             axis=alt.Axis(title=None, labelFontSize=11,
@@ -584,6 +633,9 @@ with tab_overview:
                              "grade:N",
                              alt.Tooltip("avg_monthly_rent:Q", title="Avg Rent $", format=",.0f"),
                              alt.Tooltip("price_per_sqft:Q", title="$/sqft", format=".2f")],
+                    color=alt.Color("score:Q",
+                    scale=alt.Scale(domain=[60, 80], range=["#95d5b2", "#1b4332"]),
+                    legend=None),
                 )
                 labels = alt.Chart(df_afford).mark_text(
                     align="left", dx=4, fontSize=11, fontWeight="bold", color="#e2e8f0",
@@ -601,35 +653,62 @@ with tab_overview:
         with col_transit:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.markdown(
-                '<div class="section-title">Best Transit — Top 10</div>'
-                '<div class="section-subtitle">MBTA score · Rapid transit lines · Route count</div>',
+                '<div class="section-title">Best Transit — Top 5</div>'
+                '<div class="section-subtitle">Rapid transit lines · Stop coverage</div>',
                 unsafe_allow_html=True,
             )
             if transit_list:
-                df_transit = pd.DataFrame(transit_list)
-                bars = alt.Chart(df_transit).mark_bar(
-                    cornerRadiusTopRight=5, cornerRadiusBottomRight=5, color="#60a5fa",
-                ).encode(
-                    y=alt.Y("neighborhood:N", sort=None,
-                            axis=alt.Axis(title=None, labelFontSize=11,
-                                          labelLimit=160, labelFontWeight="bold")),
-                    x=alt.X("score:Q", scale=alt.Scale(domain=[0, 100]),
-                            axis=alt.Axis(title="Transit Score", grid=True)),
-                    tooltip=["neighborhood:N",
-                             alt.Tooltip("score:Q", format=".1f"),
-                             "grade:N",
-                             "rapid_transit_lines:N",
-                             alt.Tooltip("total_routes:Q", title="Total Routes")],
-                )
-                labels = alt.Chart(df_transit).mark_text(
-                    align="left", dx=4, fontSize=11, fontWeight="bold", color="#e2e8f0",
-                ).encode(
-                    y=alt.Y("neighborhood:N", sort=None),
-                    x=alt.X("score:Q"),
-                    text=alt.Text("score:Q", format=".0f"),
-                )
-                st.altair_chart(alt.layer(bars, labels).properties(height=380),
-                                use_container_width=True)
+                LINE_PILL_COLORS = {
+                    "red":      ("#ef4444", "#fff"),
+                    "green":    ("#22c55e", "#fff"),
+                    "orange":   ("#f97316", "#fff"),
+                    "blue":     ("#3b82f6", "#fff"),
+                    "mattapan": ("#ef4444", "#fff"),
+                    "silver":   ("#94a3b8", "#fff"),
+                }
+                GRADE_COLORS = {
+                    "EXCELLENT": "#22c55e",
+                    "GOOD":      "#60a5fa",
+                    "MODERATE":  "#fbbf24",
+                    "LIMITED":   "#f87171",
+                }
+
+                def line_pills(lines_str):
+                    if not lines_str:
+                        return '<span style="color:rgba(255,255,255,0.3);font-size:11px;">Bus only</span>'
+                    pills = ""
+                    for line in lines_str.split(","):
+                        line = line.strip()
+                        color, text_color = "#64748b", "#fff"
+                        for key, (bg, fg) in LINE_PILL_COLORS.items():
+                            if key in line.lower():
+                                color, text_color = bg, fg
+                                break
+                        pills += (
+                            f'<span style="background:{color};color:{text_color};'
+                            f'padding:2px 8px;border-radius:999px;font-size:10px;'
+                            f'font-weight:700;margin-right:4px;">{line}</span>'
+                        )
+                    return pills
+                # Sort by total routes for more meaningful ranking
+                transit_sorted = sorted(
+                    transit_list,
+                    key=lambda x: (x.get("score", 0) or 0, x.get("total_routes", 0) or 0),
+                    reverse=True
+                )[:5]
+                for n in transit_sorted:
+                    lines = n.get("rapid_transit_lines")
+                    routes = n.get("total_routes", "—")
+                    st.markdown(
+                        f'<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">'
+                        f'<div style="font-weight:600;font-size:13px;color:#e2e8f0;margin-bottom:4px;">'
+                        f'{n["neighborhood"]}</div>'
+                        f'<div>{line_pills(lines)}</div>'
+                        f'<div style="color:rgba(255,255,255,0.3);font-size:10px;margin-top:3px;">'
+                        f'{routes} routes</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
             else:
                 st.info("Transit data not available.")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -642,49 +721,71 @@ with tab_overview:
             unsafe_allow_html=True,
         )
         if overall_list:
-            df_overall = pd.DataFrame(overall_list)
-            bars = alt.Chart(df_overall).mark_bar(
-                cornerRadiusTopRight=6, cornerRadiusBottomRight=6,
-            ).encode(
-                y=alt.Y("neighborhood:N", sort=None,
-                        axis=alt.Axis(title=None, labelFontSize=11,
-                                      labelLimit=180, labelFontWeight="bold")),
-                x=alt.X("score:Q", scale=alt.Scale(domain=[0, 100]),
-                        axis=alt.Axis(title="Livability Score", grid=True, tickCount=5)),
-                color=alt.Color("score:Q",
-                                scale=alt.Scale(domain=[40, 75], range=["#F59E0B", "#1E8449"]),
-                                legend=None),
-                tooltip=["neighborhood:N",
-                         alt.Tooltip("score:Q", format=".1f"),
-                         "grade:N", "top_strength:N", "top_weakness:N"],
-            )
-            labels = alt.Chart(df_overall).mark_text(
-                align="left", dx=4, fontSize=12, fontWeight="bold", color="#e2e8f0",
-            ).encode(
-                y=alt.Y("neighborhood:N", sort=None),
-                x=alt.X("score:Q"),
-                text=alt.Text("score:Q", format=".0f"),
-            )
-            st.altair_chart(alt.layer(bars, labels).properties(height=360),
-                            use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+            matrix = load_domain_matrix(hood_filter, limit=15)
+            nbhds  = matrix.get("neighborhoods", [])
 
-        # Crime summary narrative
-        highest = crime_summary.get("highest_volume_next_month", [])
-        most_improved = crime_summary.get("most_improved", [])
-        if highest:
-            st.markdown(
-                f'<div class="narrative-box">'
-                f'<div class="narrative-title">Crime Forecast Summary</div>'
-                f'Of neighborhoods with forecasts: '
-                f'<b style="color:#E45756;">{n_inc} worsening</b>, '
-                f'<b style="color:#F58518;">{n_stable} stable</b>, '
-                f'<b style="color:#54A24B;">{n_dec} improving</b>.<br>'
-                f'Highest forecast next month: '
-                f'{", ".join([n["neighborhood"] for n in highest[:3]])}.'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            if nbhds:
+                domain_cols = ["Safety", "Housing", "Transit", "Grocery",
+                            "Healthcare", "Schools", "Restaurants",
+                            "Universities", "Bluebikes"]
+
+                rows = []
+                for n in nbhds:
+                    for d in domain_cols:
+                        rows.append({
+                            "neighborhood": n["neighborhood"],
+                            "Domain":       d,
+                            "Score":        n.get(d) or 0,
+                            "master_score": n.get("master_score", 0),
+                            "strength":     n.get("top_strength", ""),
+                            "weakness":     n.get("top_weakness", ""),
+                        })
+                df_heat = pd.DataFrame(rows)
+
+                heatmap = alt.Chart(df_heat).mark_rect(
+                    stroke="#1a1a2e", strokeWidth=1,
+                ).encode(
+                    x=alt.X("Domain:N",
+                            sort=domain_cols,
+                            axis=alt.Axis(title=None, labelAngle=-30,
+                                        labelFontSize=11, labelFontWeight="bold")),
+                    y=alt.Y("neighborhood:N",
+                            sort=alt.EncodingSortField("master_score", order="descending"),
+                            axis=alt.Axis(title=None, labelFontSize=11,
+                                        labelFontWeight="bold")),
+                    color=alt.Color("Score:Q",
+                                    scale=alt.Scale(domain=[0, 100],
+                                                    range=["#1e3a5f", "#52b788"]),
+                                    legend=alt.Legend(title="Score", orient="right")),
+                    tooltip=[
+                        "neighborhood:N",
+                        "Domain:N",
+                        alt.Tooltip("Score:Q", format=".1f", title="Score"),
+                        alt.Tooltip("strength:N", title="Strength"),
+                        alt.Tooltip("weakness:N", title="Weakness"),
+                    ],
+                )
+
+                # Score text inside cells
+                text = alt.Chart(df_heat).mark_text(
+                    fontSize=10, fontWeight="bold",
+                ).encode(
+                    x=alt.X("Domain:N", sort=domain_cols),
+                    y=alt.Y("neighborhood:N",
+                            sort=alt.EncodingSortField("master_score", order="descending")),
+                    text=alt.Text("Score:Q", format=".0f"),
+                    color=alt.condition(
+                        alt.datum.Score > 50,
+                        alt.value("#0f172a"),
+                        alt.value("#e2e8f0"),
+                    ),
+                )
+
+                st.altair_chart(
+                    alt.layer(heatmap, text).properties(height=420),
+                    use_container_width=True,
+                )
+
 
     # ── Mode 2: Domain selected — deep dive ───────────────────────────────────
     else:
@@ -862,6 +963,8 @@ with tab_overview:
             mbta    = domain_data.get("mbta", [])
             bikes   = domain_data.get("bluebikes", [])
             summary = domain_data.get("summary", {})
+            map_data = load_map()
+            features = map_data.get("features", [])
 
             st.markdown(
                 f'<div class="narrative-box">'
@@ -873,6 +976,168 @@ with tab_overview:
                 unsafe_allow_html=True,
             )
 
+            # ── Transit map ───────────────────────────────────────────────────────
+            if mbta and features:
+                import pydeck as pdk
+
+                # Grade → color mapping (transit blue palette)
+                TRANSIT_FILL = {
+                    "EXCELLENT": [29,  78,  216, 200],   # deep blue
+                    "GOOD":      [96,  165, 250, 180],   # mid blue
+                    "MODERATE":  [186, 230, 253, 160],   # light blue
+                    "LIMITED":   [71,  85,  105, 140],   # grey
+                }
+
+                # Build centroid lookup
+                centroid_lookup = {
+                    f["properties"]["neighborhood"].upper(): {
+                        "lat": f["properties"]["latitude"],
+                        "lng": f["properties"]["longitude"],
+                    }
+                    for f in features
+                    if f["properties"].get("latitude")
+                }
+
+                # Enrich GeoJSON features with transit grade colors
+                transit_features = []
+                for f in features:
+                    nbhd = f["properties"]["neighborhood"].upper()
+                    # Find matching MBTA row
+                    mbta_row = next((r for r in mbta
+                                    if r["neighborhood"].upper() == nbhd), None)
+                    if not mbta_row:
+                        continue
+                    grade = str(mbta_row.get("transit_grade", "MODERATE")).upper()
+                    lines = mbta_row.get("rapid_transit_lines") or "Bus only"
+                    transit_features.append({
+                        "type": "Feature",
+                        "geometry": f["geometry"],
+                        "properties": {
+                            "neighborhood": f["properties"]["neighborhood"],
+                            "transit_score": mbta_row.get("transit_score", 0),
+                            "transit_grade": grade,
+                            "lines": lines,
+                            "total_stops": mbta_row.get("total_stops", 0),
+                            "rapid_stops": mbta_row.get("rapid_transit_stops", 0),
+                            "total_routes": mbta_row.get("total_routes", 0),
+                            "accessible_pct": mbta_row.get("pct_accessible_stops", 0),
+                            "fill_color": TRANSIT_FILL.get(grade, [100, 100, 100, 140]),
+                        }
+                    })
+
+                # Scatter layer for neighborhood centroids
+                # Color circles by dominant MBTA line color
+                LINE_COLORS = {
+                    "Red Line":    [239, 68,  68,  230],
+                    "Green":       [34,  197, 94,  230],
+                    "Blue Line":   [59,  130, 246, 230],
+                    "Orange Line": [249, 115, 22,  230],
+                    "Mattapan":    [239, 68,  68,  200],
+                    "Silver":      [148, 163, 184, 200],
+                }
+
+                scatter_data = []
+                for r in mbta:
+                    nbhd_upper = r["neighborhood"].upper()
+                    coords = centroid_lookup.get(nbhd_upper)
+                    if not coords:
+                        continue
+                    lines = r.get("rapid_transit_lines") or ""
+                    # Pick circle color based on first rapid transit line
+                    circle_color = [148, 163, 184, 200]  # default grey
+                    for line_key, color in LINE_COLORS.items():
+                        if line_key.lower() in lines.lower():
+                            circle_color = color
+                            break
+                    scatter_data.append({
+                        "name":           r["neighborhood"],
+                        "lat":            coords["lat"],
+                        "lng":            coords["lng"],
+                        "transit_score":  r.get("transit_score", 0) or 0,
+                        "transit_grade":  r.get("transit_grade", ""),
+                        "lines":          lines if lines else "Bus only",
+                        "total_stops":    r.get("total_stops", 0) or 0,
+                        "rapid_stops":    r.get("rapid_transit_stops", 0) or 0,
+                        "total_routes":   r.get("total_routes", 0) or 0,
+                        "accessible_pct": r.get("pct_accessible_stops", 0) or 0,
+                        "color":          circle_color,
+                        "radius":         max(200, min(600,
+                                            (r.get("rapid_transit_stops", 0) or 0) * 80 + 200)),
+                    })
+
+                geojson_layer = pdk.Layer(
+                    "GeoJsonLayer",
+                    data={"type": "FeatureCollection", "features": transit_features},
+                    filled=True,
+                    stroked=True,
+                    pickable=True,
+                    auto_highlight=True,
+                    get_fill_color="properties.fill_color",
+                    get_line_color=[255, 255, 255, 60],
+                    line_width_min_pixels=1,
+                )
+
+                scatter_layer = pdk.Layer(
+                    "ScatterplotLayer",
+                    data=pd.DataFrame(scatter_data),
+                    get_position=["lng", "lat"],
+                    get_fill_color="color",
+                    get_radius="radius",
+                    pickable=True,
+                    auto_highlight=True,
+                    opacity=0.9,
+                )
+
+                lats = [d["lat"] for d in scatter_data]
+                lngs = [d["lng"] for d in scatter_data]
+                view = pdk.ViewState(
+                    latitude=sum(lats) / len(lats) if lats else 42.36,
+                    longitude=sum(lngs) / len(lngs) if lngs else -71.06,
+                    zoom=10.5, pitch=0,
+                )
+
+                deck = pdk.Deck(
+                    layers=[geojson_layer, scatter_layer],
+                    initial_view_state=view,
+                    tooltip={
+                        "html": "<b>{name}</b><br/>"
+                                "Score: <b>{transit_score}</b>/100 · <b>{transit_grade}</b><br/>"
+                                "Lines: <b>{lines}</b><br/>"
+                                "Stops: {total_stops} total · {rapid_stops} rapid transit<br/>"
+                                "Routes: {total_routes} · Accessible: {accessible_pct}%",
+                        "style": {
+                            "backgroundColor": "#1e293b",
+                            "color": "#e2e8f0",
+                            "fontSize": "12px",
+                            "borderRadius": "8px",
+                            "padding": "8px",
+                        },
+                    },
+                    map_style="mapbox://styles/mapbox/dark-v10",
+                )
+
+                st.pydeck_chart(deck, use_container_width=True, height=540)
+
+                # Legend — transit grades + line colors
+                st.markdown(
+                    '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:8px;">'
+                    '<span style="color:#1d4ed8;font-weight:600;">■ Excellent</span>'
+                    '<span style="color:#60a5fa;font-weight:600;">■ Good</span>'
+                    '<span style="color:#bae6fd;font-weight:600;">■ Moderate</span>'
+                    '<span style="color:#475569;font-weight:600;">■ Limited</span>'
+                    '&nbsp;&nbsp;|&nbsp;&nbsp;'
+                    '<span style="color:#ef4444;">● Red Line</span>'
+                    '<span style="color:#22c55e;">● Green Line</span>'
+                    '<span style="color:#3b82f6;">● Blue Line</span>'
+                    '<span style="color:#f97316;">● Orange Line</span>'
+                    '<span style="color:#94a3b8;">● Bus/Other</span>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.info("Transit map data not available.")
+
+            # ── Bar charts below map ──────────────────────────────────────────────
             col1, col2 = st.columns(2, gap="medium")
 
             with col1:
@@ -888,35 +1153,35 @@ with tab_overview:
                         x=alt.X("transit_score:Q", scale=alt.Scale(domain=[0, 100]),
                                 axis=alt.Axis(title="Transit Score")),
                         tooltip=["neighborhood:N",
-                                 alt.Tooltip("transit_score:Q", format=".1f"),
-                                 "transit_grade:N",
-                                 "rapid_transit_lines:N",
-                                 alt.Tooltip("total_routes:Q", title="Routes"),
-                                 alt.Tooltip("pct_accessible_stops:Q", title="% Accessible", format=".1f")],
+                                alt.Tooltip("transit_score:Q", format=".1f"),
+                                "transit_grade:N",
+                                "rapid_transit_lines:N",
+                                alt.Tooltip("total_routes:Q", title="Routes"),
+                                alt.Tooltip("pct_accessible_stops:Q", title="% Accessible", format=".1f")],
                     )
                     st.altair_chart(bars.properties(height=480), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
             with col2:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">BlueBikes Scores</div>', unsafe_allow_html=True)
-                if bikes:
-                    df_b = pd.DataFrame(bikes[:20])
-                    bars = alt.Chart(df_b).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#34d399",
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("bikeshare_score:Q", scale=alt.Scale(domain=[0, 100]),
-                                axis=alt.Axis(title="BlueBikes Score")),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("bikeshare_score:Q", format=".1f"),
-                                 "bikeshare_grade:N",
-                                 alt.Tooltip("total_stations:Q", title="Stations"),
-                                 alt.Tooltip("total_docks:Q", title="Docks"),
-                                 alt.Tooltip("stations_per_sqmile:Q", format=".2f", title="Stations/sqmi")],
+                st.markdown('<div class="section-title">Stop Type Breakdown — Top 15</div>', unsafe_allow_html=True)
+                if mbta:
+                    df_t = pd.DataFrame(mbta[:15])
+                    df_melt = df_t[["neighborhood", "rapid_transit_stops", "commuter_rail_stops", "bus_stops"]].melt(
+                        id_vars="neighborhood", var_name="Stop Type", value_name="Count"
                     )
-                    st.altair_chart(bars.properties(height=480), use_container_width=True)
+                    stacked = alt.Chart(df_melt).mark_bar().encode(
+                        y=alt.Y("neighborhood:N", sort=None,
+                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
+                        x=alt.X("Count:Q", axis=alt.Axis(title="Stop Count")),
+                        color=alt.Color("Stop Type:N",
+                            scale=alt.Scale(
+                                domain=["rapid_transit_stops", "commuter_rail_stops", "bus_stops"],
+                                range=["#60a5fa", "#a78bfa", "#34d399"]),
+                            legend=alt.Legend(title=None, orient="bottom")),
+                        tooltip=["neighborhood:N", "Stop Type:N", "Count:Q"],
+                    )
+                    st.altair_chart(stacked.properties(height=480), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
         # ── GROCERY deep dive ─────────────────────────────────────────────────
