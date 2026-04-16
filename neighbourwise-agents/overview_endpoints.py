@@ -158,7 +158,7 @@ async def get_neighbors(neighborhood: str, limit: int = Query(8, ge=3, le=15)):
             SELECT CENTROID_LAT, CENTROID_LONG
             FROM NEIGHBOURWISE_DOMAINS.MARTS.MASTER_LOCATION
             WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
-              AND GRANULARITY = 'NEIGHBORHOOD'
+              AND CENTROID_LAT IS NOT NULL
             LIMIT 1
         """, conn)
 
@@ -333,8 +333,7 @@ async def get_map():
                 ON UPPER(ml.NEIGHBORHOOD_NAME) = UPPER(ns.NEIGHBORHOOD_NAME)
             INNER JOIN NEIGHBOURWISE_DOMAINS.ANALYTICS.NEIGHBORHOOD_MASTER_SCORE ms
                 ON UPPER(ml.NEIGHBORHOOD_NAME) = UPPER(ms.NEIGHBORHOOD_NAME)
-            WHERE ml.CITY IN ('BOSTON', 'CAMBRIDGE')
-              AND ml.GRANULARITY = 'NEIGHBORHOOD'
+            WHERE ml.GRANULARITY IN ('NEIGHBORHOOD', 'CITY')
               AND ns.SAFETY_SCORE IS NOT NULL
               AND ns.SAFETY_GRADE != 'INSUFFICIENT DATA'
               AND ml.HAS_GEOMETRY = TRUE
