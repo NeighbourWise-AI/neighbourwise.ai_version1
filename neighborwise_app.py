@@ -36,7 +36,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8001").rstrip("/")
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="NeighbourWise AI",
+    page_title="NeighborWise AI",
     page_icon="🏘️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -52,6 +52,7 @@ st.markdown("""
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .block-container { padding: 1rem 2rem 2rem 2rem; }
 #MainMenu, footer, header { visibility: hidden; }
+
 
 .hero-card {
     background: linear-gradient(135deg, #1e3a5f 0%, #2d6a4f 45%, #52b788 100%);
@@ -72,7 +73,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
 .metric-card {
     background: rgba(255,255,255,0.06); padding: 0.9rem 1.1rem;
-    border-radius: 14px; border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px; border: 1.5px solid rgba(255,255,255,0.6);
     margin-bottom: 0.7rem; height: 110px; overflow: hidden;
 }
 .metric-label {
@@ -87,11 +88,14 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
 }
-.metric-sub { font-size: 0.7rem; color: rgba(255,255,255,0.35); margin-top: 0.15rem; }
+.metric-sub { 
+    font-size: 0.7rem; color: rgba(255,255,255,0.35); margin-top: 0.15rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 .section-card {
     background: rgba(255,255,255,0.04); padding: 1.1rem 1.2rem 0.9rem;
-    border-radius: 14px; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px; border: 1.5px solid rgba(255,255,255,0.6);
     margin-bottom: 1rem;
 }
 .section-title {
@@ -164,6 +168,61 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .badge-report { background: rgba(139,92,246,0.2);  color: #c4b5fd; }
 .badge-image  { background: rgba(236,72,153,0.2);  color: #f9a8d4; }
 .badge-graph  { background: rgba(251,146,60,0.2);  color: #fed7aa; }
+
+/* ── Cost Tracker ─────────────────────────────────────────────────── */
+.ct-panel {
+    background: rgba(13,15,20,0.97);
+    border: 1px solid rgba(79,255,176,0.2);
+    border-radius: 14px;
+    padding: 0;
+    margin-top: 1.4rem;
+    overflow: hidden;
+}
+.ct-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+    background: rgba(79,255,176,0.05);
+    border-bottom: 1px solid rgba(79,255,176,0.1);
+}
+.ct-header-title {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: #4fffb0;
+}
+.ct-session-stat { margin-left: auto; font-size: 10px; color: rgba(255,255,255,0.3); font-family: monospace; }
+.ct-session-stat b { color: #4fffb0; }
+.ct-summary-row { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid rgba(255,255,255,0.05); }
+.ct-summary-tile { padding: 10px 14px; border-right: 1px solid rgba(255,255,255,0.05); }
+.ct-summary-tile:last-child { border-right: none; }
+.ct-tile-label { font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; color: rgba(255,255,255,0.28); margin-bottom: 3px; font-family: monospace; }
+.ct-tile-value { font-size: 13px; font-weight: 700; color: #e2e8f0; font-family: monospace; }
+.ct-tile-value.green  { color: #4fffb0; }
+.ct-tile-value.blue   { color: #60a5fa; }
+.ct-tile-value.yellow { color: #fbbf24; }
+.ct-tile-value.orange { color: #fb923c; }
+.ct-log-wrap { max-height: 220px; overflow-y: auto; }
+.ct-log-header {
+    display: grid; grid-template-columns: 24px 1fr 112px 72px 82px 70px 58px;
+    gap: 6px; padding: 6px 14px 4px; font-size: 9px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: rgba(255,255,255,0.22);
+    border-bottom: 1px solid rgba(255,255,255,0.05); font-family: monospace;
+    position: sticky; top: 0; background: rgba(13,15,20,0.97);
+}
+.ct-log-row {
+    display: grid; grid-template-columns: 24px 1fr 112px 72px 82px 70px 58px;
+    gap: 6px; padding: 6px 14px; font-size: 10.5px; color: rgba(255,255,255,0.5);
+    border-bottom: 1px solid rgba(255,255,255,0.04); align-items: center; font-family: monospace;
+}
+.ct-log-row:last-child { border-bottom: none; }
+.ct-log-row:nth-child(even) { background: rgba(255,255,255,0.012); }
+.ct-num   { color: rgba(255,255,255,0.18); text-align: right; font-size: 9px; }
+.ct-query { color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ct-model { color: #00d4ff; font-size: 9.5px; }
+.ct-tok   { color: #e2e8f0; text-align: right; }
+.ct-cost  { color: #4fffb0; text-align: right; font-weight: 700; }
+.ct-type  { color: rgba(255,255,255,0.32); font-size: 9px; }
+.ct-lat   { color: rgba(255,255,255,0.28); text-align: right; }
+.ct-empty { padding: 18px 14px; font-size: 11px; color: rgba(255,255,255,0.18); text-align: center; font-style: italic; font-family: monospace; }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -232,6 +291,10 @@ def load_domain_matrix(neighborhood: str = None, limit: int = 20):
     params["limit"] = limit
     return api_get("/overview/domain-matrix", params=params)
 
+@st.cache_data(ttl=3600)
+def load_neighbors(neighborhood: str, limit: int = 8):
+    return api_get(f"/overview/neighbors/{neighborhood}", params={"limit": limit})
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -291,6 +354,129 @@ REPORT_STEPS = [
     "📄 Assembling PDF...",
 ]
 
+# ══════════════════════════════════════════════════════════════════════════════
+# COST TRACKER HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _esc(s: str) -> str:
+    """Minimal HTML-escape for safe injection."""
+    return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
+
+
+def _init_cost_tracker():
+    if "ct_queries" not in st.session_state:
+        st.session_state.ct_queries        = []
+        st.session_state.ct_session_tokens = 0
+        st.session_state.ct_session_cost   = 0.0
+
+
+def _log_query_cost(query_text: str, result: dict, elapsed: float):
+    _init_cost_tracker()
+    usage = result.get("llm_usage") or {}
+    if not usage:
+        return
+    total_tokens = usage.get("total_tokens", 0)
+    total_cost   = usage.get("total_cost_usd", 0.0)
+    total_lat    = usage.get("total_latency_s", elapsed)
+    num_calls    = usage.get("num_llm_calls", 0)
+    calls        = usage.get("calls", [])
+    route_type   = (result.get("routing") or {}).get("intent", result.get("type", "—"))
+    st.session_state.ct_queries.append({
+        "n":         len(st.session_state.ct_queries) + 1,
+        "query":     query_text,
+        "tokens":    total_tokens,
+        "cost":      total_cost,
+        "latency":   total_lat,
+        "calls":     calls,
+        "num_calls": num_calls,
+        "route":     route_type,
+    })
+    st.session_state.ct_session_tokens += total_tokens
+    st.session_state.ct_session_cost   += total_cost
+
+
+def _render_cost_tracker():
+    _init_cost_tracker()
+    queries      = st.session_state.ct_queries
+    total_tokens = st.session_state.ct_session_tokens
+    total_cost   = st.session_state.ct_session_cost
+    num_queries  = len(queries)
+    avg_cost     = (total_cost / num_queries) if num_queries else 0.0
+    last_lat     = queries[-1]["latency"] if queries else 0.0
+    last_route   = queries[-1]["route"]   if queries else "—"
+
+    header_html = (
+        f'<div class="ct-header">'
+        f'<span style="font-size:14px;">💰</span>'
+        f'<span class="ct-header-title">Session Cost Tracker</span>'
+        f'<span class="ct-session-stat">'
+        f'<b>{num_queries}</b> quer{"y" if num_queries==1 else "ies"} &nbsp;·&nbsp; '
+        f'<b>{total_tokens:,}</b> tokens &nbsp;·&nbsp; '
+        f'<b>${total_cost:.6f}</b> total'
+        f'</span></div>'
+    )
+    tiles_html = (
+        f'<div class="ct-summary-row">'
+        f'<div class="ct-summary-tile"><div class="ct-tile-label">Session Tokens</div><div class="ct-tile-value blue">{total_tokens:,}</div></div>'
+        f'<div class="ct-summary-tile"><div class="ct-tile-label">Session Cost</div><div class="ct-tile-value green">${total_cost:.4f}</div></div>'
+        f'<div class="ct-summary-tile"><div class="ct-tile-label">Avg / Query</div><div class="ct-tile-value">${avg_cost:.5f}</div></div>'
+        f'<div class="ct-summary-tile"><div class="ct-tile-label">Last Latency</div><div class="ct-tile-value yellow">{last_lat:.1f}s</div></div>'
+        f'<div class="ct-summary-tile"><div class="ct-tile-label">Last Route</div><div class="ct-tile-value orange">{last_route}</div></div>'
+        f'</div>'
+    )
+
+    if not queries:
+        log_html = '<div class="ct-empty">No queries yet — results will appear here after each search.</div>'
+    else:
+        col_headers = (
+            '<div class="ct-log-header">'
+            '<span>#</span><span>Query</span><span>Model</span>'
+            '<span style="text-align:right">Tokens</span>'
+            '<span style="text-align:right">Cost</span>'
+            '<span>Purpose</span><span style="text-align:right">Latency</span>'
+            '</div>'
+        )
+        rows_html = ""
+        for q in reversed(queries):
+            calls = q.get("calls") or []
+            if calls:
+                for i, call in enumerate(calls):
+                    tok    = (call.get("input_tokens",0) or 0) + (call.get("output_tokens",0) or 0)
+                    cost_c = call.get("cost_usd", 0.0) or 0.0
+                    model  = str(call.get("model","—")).replace("claude-sonnet-4-6","claude-4.6 ✦")
+                    purpose= call.get("purpose","—")
+                    lat_c  = call.get("latency_s", 0.0) or 0.0
+                    q_label= _esc(q["query"][:42]+"…" if len(q["query"])>42 else q["query"]) if i==0 else f'↳ call {i+1}'
+                    num_label = str(q["n"]) if i==0 else ""
+                    rows_html += (
+                        f'<div class="ct-log-row">'
+                        f'<span class="ct-num">{num_label}</span>'
+                        f'<span class="ct-query" title="{_esc(q["query"])}">{q_label}</span>'
+                        f'<span class="ct-model">{_esc(model[:14])}</span>'
+                        f'<span class="ct-tok">{tok:,}</span>'
+                        f'<span class="ct-cost">${cost_c:.6f}</span>'
+                        f'<span class="ct-type">{_esc(purpose)}</span>'
+                        f'<span class="ct-lat">{lat_c:.2f}s</span>'
+                        f'</div>'
+                    )
+            else:
+                rows_html += (
+                    f'<div class="ct-log-row">'
+                    f'<span class="ct-num">{q["n"]}</span>'
+                    f'<span class="ct-query" title="{_esc(q["query"])}">{_esc(q["query"][:42]+"…" if len(q["query"])>42 else q["query"])}</span>'
+                    f'<span class="ct-model">mixed</span>'
+                    f'<span class="ct-tok">{q["tokens"]:,}</span>'
+                    f'<span class="ct-cost">${q["cost"]:.6f}</span>'
+                    f'<span class="ct-type">{_esc(q["route"])}</span>'
+                    f'<span class="ct-lat">{q["latency"]:.2f}s</span>'
+                    f'</div>'
+                )
+        log_html = f'<div class="ct-log-wrap">{col_headers}{rows_html}</div>'
+
+    st.markdown(
+        f'<div class="ct-panel">{header_html}{tiles_html}{log_html}</div>',
+        unsafe_allow_html=True,
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # UI HELPERS
@@ -309,6 +495,17 @@ def render_metric_cards(items: list):
 
 
 def render_assistant_message(msg: dict, key_prefix: str):
+     # ── Guardrail block ───────────────────────────────────────────────────────
+    if msg.get("type") == "blocked":
+        st.markdown(
+            f'<div class="narrative-box" style="border-left-color:#f87171;'
+            f'background:rgba(248,113,113,0.08);">'
+            f'<div class="narrative-title" style="color:#f87171;">🛡️ Query Blocked</div>'
+            f'{msg["content"]}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        return
     st.markdown(msg["content"])
 
     # Chart image
@@ -372,7 +569,7 @@ def render_assistant_message(msg: dict, key_prefix: str):
 
 st.markdown("""
 <div class="hero-card">
-    <div class="hero-title">NeighbourWise AI — Neighborhood Intelligence</div>
+    <div class="hero-title">NeighborWise AI — Neighborhood Intelligence</div>
     <div class="hero-subtitle">
         Crime safety forecasting, domain scoring, and neighborhood analysis across
         51 Boston &amp; Cambridge neighborhoods — powered by SARIMAX, DBSCAN, RAG,
@@ -384,7 +581,7 @@ st.markdown("""
 with st.sidebar:
     st.markdown(
         '<div style="font-family:DM Serif Display,serif;font-size:1.15rem;'
-        'color:#e2e8f0;margin-bottom:3px;">NeighbourWise AI</div>'
+        'color:#e2e8f0;margin-bottom:3px;">NeighborWise AI</div>'
         '<div style="font-size:0.75rem;color:rgba(255,255,255,0.4);margin-bottom:12px;">'
         'Boston · Cambridge · Greater Boston</div>',
         unsafe_allow_html=True,
@@ -428,367 +625,523 @@ domain_filter = selected_domain if selected_domain != "ALL" else None
 # ══════════════════════════════════════════════════════════════════════════════
 
 tab_overview, tab_chat, tab_report = st.tabs([
-    "🏠  Overview", "💬  Ask NeighbourWise", "📄  Neighborhood Report",
+    "🏠  Overview", "💬  Ask NeighborWise", "📄  Neighborhood Report",
 ])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — OVERVIEW
+# Three modes:
+#   Mode 3: hood_filter AND NOT domain_filter  → Neighborhood Profile
+#   Mode 2: domain_filter                      → Domain Deep Dive
+#   Mode 1: neither                            → Home Page
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_overview:
     import altair as alt
 
-    kpis = load_kpis(hood_filter)
+    # ── Always city-wide — never pass hood_filter to load_kpis ───────────────
+    kpis          = load_kpis()          # FIX: no hood_filter here
     crime_summary = load_crime_summary()
 
-    # ── KPI metric cards ──────────────────────────────────────────────────────
-    safest_list    = kpis.get("safest", [])
+    safest_list     = kpis.get("safest", [])
     affordable_list = kpis.get("most_affordable", [])
-    transit_list   = kpis.get("best_transit", [])
-    overall_list   = kpis.get("best_overall", [])
+    transit_list    = kpis.get("best_transit", [])
+    overall_list    = kpis.get("best_overall", [])
 
-    safest_name  = safest_list[0]["neighborhood"]    if safest_list    else "—"
-    safest_score = safest_list[0]["score"]           if safest_list    else "—"
+    safest_name  = safest_list[0]["neighborhood"]     if safest_list     else "—"
     afford_name  = affordable_list[0]["neighborhood"] if affordable_list else "—"
-    afford_rent  = affordable_list[0].get("avg_monthly_rent")
+    afford_rent  = affordable_list[0].get("avg_monthly_rent") if affordable_list else None
     afford_sub   = f"Avg rent: ${afford_rent:,.0f}/mo" if afford_rent else "Highest affordability score"
 
     trend_summary = crime_summary.get("trend_summary", {})
-    n_inc = trend_summary.get("increasing", {}).get("neighborhood_count", 0)
-    n_dec = trend_summary.get("decreasing", {}).get("neighborhood_count", 0)
-    n_stable = trend_summary.get("stable", {}).get("neighborhood_count", 0)
+    n_inc    = trend_summary.get("increasing", {}).get("neighborhood_count", 0)
+    n_dec    = trend_summary.get("decreasing", {}).get("neighborhood_count", 0)
+    n_stable = trend_summary.get("stable",     {}).get("neighborhood_count", 0)
 
     transit_sorted_kpi = sorted(
         transit_list,
         key=lambda x: (x.get("score", 0) or 0, x.get("total_routes", 0) or 0),
-        reverse=True
+        reverse=True,
     )
-    best_transit_name  = transit_sorted_kpi[0]["neighborhood"] if transit_sorted_kpi else "—"
+    best_transit_name  = transit_sorted_kpi[0]["neighborhood"]        if transit_sorted_kpi else "—"
     best_transit_lines = transit_sorted_kpi[0].get("rapid_transit_lines") if transit_sorted_kpi else None
-    transit_sub = best_transit_lines if best_transit_lines else "Bus network only"
+    transit_sub        = best_transit_lines if best_transit_lines else "Bus network only"
 
-    # Get rapid transit lines for best transit
-    best_transit_lines = transit_list[0].get("rapid_transit_lines") if transit_list else None
-    transit_sub = best_transit_lines if best_transit_lines else "Bus network only"
-    total = n_inc + n_dec + n_stable
+    total     = n_inc + n_dec + n_stable
     safer_pct = round((n_dec + n_stable) / total * 100) if total > 0 else 0
 
-    render_metric_cards([
-        ("Neighborhoods",     51 if not hood_filter else "1",  "Boston · Cambridge · Suburbs"),
-        ("Safest",            safest_name,                      f"Grade: {safest_list[0].get('grade', '—')} · Lowest crime rate"),
-        ("Most Affordable",   afford_name,                      afford_sub),
-        ("Best Transit",      best_transit_name,                transit_sub[:60] if transit_sub else "Excellent coverage"),
-        ("Crime Trend", f"{safer_pct}% holding steady", f"📉 {n_dec} improving · ➡️ {n_stable} stable · 📈 {n_inc} rising"),
-    ])
+    # KPI cards always city-wide regardless of sidebar selection
+    if not hood_filter:
+        render_metric_cards([
+            ("Neighborhoods",   "51",          "Boston · Cambridge · Suburbs"),
+            ("Safest",          safest_name,   f"Grade: {safest_list[0].get('grade', '—')} · Lowest crime rate" if safest_list else "—"),
+            ("Most Affordable", afford_name,   afford_sub),
+            ("Best Transit",    best_transit_name, transit_sub[:60] if transit_sub else "Excellent coverage"),
+            ("Crime Trend",     f"{safer_pct}% holding steady", f"📉 {n_dec} improving · ➡️ {n_stable} stable · 📈 {n_inc} rising"),
+        ])
 
-    # ── Mode 1: ALL domain — show map + top-10 KPI charts ────────────────────
-    if not domain_filter:
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 3: Neighborhood selected + ALL domains → Neighborhood Profile
+    # ══════════════════════════════════════════════════════════════════════════
+    if hood_filter and not domain_filter:
 
-        # Row 1: Map + Safest neighborhoods bar
-        col_map, col_safe = st.columns([1.2, 1], gap="medium")
+        matrix    = load_domain_matrix(hood_filter, limit=1)
+        nbhd_data = matrix.get("neighborhoods", [{}])[0]
 
-        with col_map:
+        safety_data  = load_domain("safety",     hood_filter)
+        housing_data = load_domain("housing",    hood_filter)
+        transit_data = load_domain("transit",    hood_filter)
+        grocery_data = load_domain("grocery",    hood_filter)
+        school_data  = load_domain("schools",    hood_filter)
+        health_data  = load_domain("healthcare", hood_filter)
+
+        safety_n  = safety_data.get("scores",         [{}])[0] if safety_data.get("scores")         else {}
+        housing_n = housing_data.get("neighborhoods", [{}])[0] if housing_data.get("neighborhoods") else {}
+        transit_n = transit_data.get("mbta",          [{}])[0] if transit_data.get("mbta")          else {}
+        grocery_n = grocery_data.get("scores",        [{}])[0] if grocery_data.get("scores")        else {}
+        school_n  = school_data.get("neighborhoods",  [{}])[0] if school_data.get("neighborhoods")  else {}
+        health_n  = health_data.get("scores",         [{}])[0] if health_data.get("scores")         else {}
+
+        master_grade = nbhd_data.get("master_grade", "—")
+        master_score = nbhd_data.get("master_score", "—")
+        top_strength = nbhd_data.get("top_strength", "—")
+        top_weakness = nbhd_data.get("top_weakness", "—")
+        city         = nbhd_data.get("city", "—")
+
+        GRADE_BG = {
+            "TOP PICK":       ("#1E8449", "#fff"),
+            "SOLID CHOICE":   ("#2d6a4f", "#fff"),
+            "MODERATE PICK":  ("#F1C40F", "#000"),
+            "LIMITED APPEAL": ("#C0392B", "#fff"),
+        }
+        DOMAIN_COLORS = {
+            "TRANSIT":      "#60a5fa", "SAFETY":      "#22c55e",
+            "SCHOOLS":      "#a78bfa", "HOUSING":     "#34d399",
+            "GROCERY":      "#fbbf24", "HEALTHCARE":  "#f472b6",
+            "RESTAURANTS":  "#fb923c", "UNIVERSITIES":"#818cf8",
+            "BLUEBIKES":    "#67e8f9",
+        }
+        grade_bg, grade_fg = GRADE_BG.get(master_grade, ("#475569", "#fff"))
+        s_color = DOMAIN_COLORS.get(str(top_strength).upper(), "#64748b")
+
+        # ── Hero ──────────────────────────────────────────────────────────────
+        st.markdown(
+            f'<div style="background:linear-gradient(135deg,#1e3a5f,#2d6a4f);'
+            f'border-radius:16px;padding:1.6rem 2rem;margin-bottom:1rem;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+
+            f'<div style="flex:1;">'
+            f'<div style="font-family:DM Serif Display,serif;font-size:2.2rem;color:#e2e8f0;margin-bottom:2px;">{hood_filter}</div>'
+            f'<div style="color:rgba(255,255,255,0.5);font-size:0.85rem;margin-bottom:14px;">{city}, Massachusetts</div>'
+            f'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">'
+            f'<span style="background:{grade_bg};color:{grade_fg};padding:5px 16px;'
+            f'border-radius:999px;font-size:12px;font-weight:700;letter-spacing:0.04em;">{master_grade}</span>'
+            f'<span style="background:{s_color}33;color:{s_color};border:1.5px solid {s_color}66;'
+            f'padding:5px 16px;border-radius:999px;font-size:12px;font-weight:700;">'
+            f'↑ Strength: {top_strength}</span>'
+            f'<span style="background:rgba(248,113,113,0.2);color:#f87171;'
+            f'border:1.5px solid rgba(248,113,113,0.4);'
+            f'padding:5px 16px;border-radius:999px;font-size:12px;font-weight:700;">'
+            f'↓ Weakness: {top_weakness}</span>'
+            f'</div>'
+            f'</div>'
+
+            f'<div style="text-align:center;padding-left:2rem;">'
+            f'<div style="font-family:DM Serif Display,serif;font-size:3.5rem;'
+            f'color:#e2e8f0;line-height:1;">{int(master_score) if master_score != "—" else "—"}</div>'
+            f'<div style="color:rgba(255,255,255,0.4);font-size:11px;margin-top:4px;'
+            f'text-transform:uppercase;letter-spacing:0.08em;">Overall Score</div>'
+            f'<div style="color:rgba(255,255,255,0.3);font-size:10px;margin-top:2px;">out of 100</div>'
+            f'</div>'
+
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Domain Scorecard bar chart ─────────────────────────────────────────
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-title">Domain Scorecard</div>'
+            '<div class="section-subtitle">All 9 domains at a glance</div>',
+            unsafe_allow_html=True,
+        )
+        domain_cols = ["Safety","Housing","Transit","Grocery","Healthcare",
+                       "Schools","Restaurants","Universities","Bluebikes"]
+        df_sc = pd.DataFrame([{"Domain": d, "Score": nbhd_data.get(d) or 0} for d in domain_cols])
+        sc_bars = alt.Chart(df_sc).mark_bar(cornerRadiusTopRight=6, cornerRadiusBottomRight=6).encode(
+            x=alt.X("Domain:N", sort=domain_cols,
+                    axis=alt.Axis(title=None, labelFontSize=12, labelFontWeight="bold", labelAngle=0)),
+            y=alt.Y("Score:Q", scale=alt.Scale(domain=[0, 100]),
+                    axis=alt.Axis(title="Score", grid=True, tickCount=5)),
+            color=alt.Color("Score:Q",
+                            scale=alt.Scale(domain=[0, 100], range=["#1e3a5f", "#52b788"]),
+                            legend=None),
+            tooltip=["Domain:N", alt.Tooltip("Score:Q", format=".1f")],
+        )
+        sc_text = alt.Chart(df_sc).mark_text(
+            align="center", dy=-8, fontSize=12, fontWeight="bold", color="#e2e8f0",
+        ).encode(
+            x=alt.X("Domain:N", sort=domain_cols),
+            y=alt.Y("Score:Q"),
+            text=alt.Text("Score:Q", format=".0f"),
+        )
+        st.altair_chart(alt.layer(sc_bars, sc_text).properties(height=260), use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Safety + Housing ──────────────────────────────────────────────────
+        col_s, col_h = st.columns(2, gap="medium")
+
+        with col_s:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown(
-                '<div class="section-title">Neighborhood Safety Score — Boston & Cambridge</div>'
-                '<div class="section-subtitle">Green = safer · Red = higher concern · Hover for details</div>',
-                unsafe_allow_html=True,
-            )
-            map_data = load_map()
-            features = map_data.get("features", [])
-            if features:
-                import pydeck as pdk
-
-                for f in features:
-                    grade = f["properties"].get("safety_grade", "")
-                    f["properties"]["fill_color"] = SAFETY_COLORS.get(
-                        str(grade).strip().upper(), [160, 160, 160, 140]
-                    )
-
-                geojson = {"type": "FeatureCollection", "features": features}
-                lats = [f["properties"]["latitude"] for f in features if f["properties"].get("latitude")]
-                lngs = [f["properties"]["longitude"] for f in features if f["properties"].get("longitude")]
-
-                layer = pdk.Layer(
-                    "GeoJsonLayer", data=geojson,
-                    filled=True, stroked=True, pickable=True, auto_highlight=True,
-                    get_fill_color="properties.fill_color",
-                    get_line_color=[255, 255, 255, 120],
-                    line_width_min_pixels=1,
+            st.markdown('<div class="section-title">🛡️ Safety</div>', unsafe_allow_html=True)
+            if safety_n:
+                sg = safety_n.get("safety_grade", "—")
+                sg_color = {"EXCELLENT":"#1E8449","GOOD":"#82E0AA",
+                            "MODERATE":"#F1C40F","HIGH CONCERN":"#C0392B"}.get(sg, "#64748b")
+                yoy = safety_n.get("yoy_change_pct", 0) or 0
+                yoy_color = "#22c55e" if yoy < 0 else "#ef4444"
+                yoy_arrow = "↓" if yoy < 0 else "↑"
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;margin-bottom:12px;">'
+                    f'<span style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{safety_n.get("safety_score","—")}</span>'
+                    f'<span style="background:{sg_color}22;color:{sg_color};border:1px solid {sg_color}44;'
+                    f'padding:4px 12px;border-radius:999px;font-weight:700;font-size:12px;align-self:center;">{sg}</span>'
+                    f'</div>', unsafe_allow_html=True,
                 )
-                view = pdk.ViewState(
-                    latitude=sum(lats) / len(lats) if lats else 42.36,
-                    longitude=sum(lngs) / len(lngs) if lngs else -71.06,
-                    zoom=10.8, pitch=0,
-                )
-                deck = pdk.Deck(
-                    layers=[layer], initial_view_state=view,
-                    tooltip={
-                        "html": "<b>{neighborhood}</b><br/>"
-                                "Safety: <b>{safety_score}</b>/100 ({safety_grade})<br/>"
-                                "Overall: <b>{master_score}</b>/100 ({master_grade})<br/>"
-                                "Strength: {top_strength} · Weakness: {top_weakness}",
-                        "style": {"backgroundColor": "#1e293b", "color": "#e2e8f0",
-                                  "fontSize": "12px", "borderRadius": "8px", "padding": "8px"},
-                    },
-                    map_style="mapbox://styles/mapbox/dark-v10",
-                )
-                st.pydeck_chart(deck, use_container_width=True, height=500)
-                l1, l2, l3, l4 = st.columns(4)
-                l1.markdown('<span style="color:#1E8449;">■</span> **Excellent**', unsafe_allow_html=True)
-                l2.markdown('<span style="color:#82E0AA;">■</span> **Good**',      unsafe_allow_html=True)
-                l3.markdown('<span style="color:#F1C40F;">■</span> **Moderate**',  unsafe_allow_html=True)
-                l4.markdown('<span style="color:#C0392B;">■</span> **High Concern**', unsafe_allow_html=True)
-            else:
-                st.info("Map data not available.")
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        with col_safe:
-            st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown(
-                '<div class="section-title">Safety Grade Distribution</div>'
-                '<div class="section-subtitle">All 50 neighborhoods · How Boston stacks up on safety</div>',
-                unsafe_allow_html=True,
-            )
-            if safest_list:
-                # Build grade distribution from full KPI data
-                domain_safety = load_domain("safety", hood_filter)
-                all_scores = domain_safety.get("scores", [])
-                if all_scores:
-                    df_all = pd.DataFrame(all_scores)
-                    grade_counts = df_all["safety_grade"].value_counts().reset_index()
-                    grade_counts.columns = ["Grade", "Count"]
-
-                    grade_order = ["EXCELLENT", "GOOD", "MODERATE", "HIGH CONCERN"]
-                    grade_colors = ["#1E8449", "#82E0AA", "#F1C40F", "#C0392B"]
-
-                    donut = alt.Chart(grade_counts).mark_arc(
-                        innerRadius=70, outerRadius=130,
-                        stroke="#1a1a2e", strokeWidth=2,
-                    ).encode(
-                        theta=alt.Theta("Count:Q", stack=True),
-                        color=alt.Color("Grade:N",
-                            scale=alt.Scale(domain=grade_order, range=grade_colors),
-                            legend=alt.Legend(title=None, orient="bottom",
-                                            direction="horizontal", labelFontSize=12)),
-                        order=alt.Order("Count:Q", sort="descending"),
-                        tooltip=[
-                            alt.Tooltip("Grade:N", title="Grade"),
-                            alt.Tooltip("Count:Q", title="Neighborhoods"),
-                        ],
+                for label, val in [
+                    ("Total Incidents", f'{safety_n.get("total_incidents","—"):,}' if safety_n.get("total_incidents") else "—"),
+                    ("Violent Crimes",  f'{safety_n.get("violent_crimes","—")} ({safety_n.get("pct_violent","—")}%)'),
+                    ("Most Common",     safety_n.get("most_common_offense","—") or "—"),
+                    ("YoY Change",      f'<span style="color:{yoy_color}">{yoy_arrow} {abs(yoy):.1f}%</span>'),
+                    ("Avg Monthly",     f'{safety_n.get("avg_monthly_incidents","—")} incidents'),
+                ]:
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;padding:5px 0;'
+                        f'border-bottom:1px solid rgba(255,255,255,0.06);">'
+                        f'<span style="color:rgba(255,255,255,0.45);font-size:12px;">{label}</span>'
+                        f'<span style="color:#e2e8f0;font-size:12px;font-weight:500;">{val}</span></div>',
+                        unsafe_allow_html=True,
                     )
-                    # Add percentage to grade_counts
-                    grade_counts["Pct"] = (grade_counts["Count"] / grade_counts["Count"].sum() * 100).round(0).astype(int).astype(str) + "%"
-
-                    labels = alt.Chart(grade_counts).mark_text(
-                        radius=155, fontSize=14, fontWeight="bold", color="#e2e8f0",
-                    ).encode(
-                        theta=alt.Theta("Count:Q", stack=True),
-                        order=alt.Order("Count:Q", sort="descending"),
-                        text=alt.Text("Pct:N"),
-                    )
-                    # Top 3 safest as mini list below donut
-                    top3 = safest_list[:3]
-                    st.altair_chart(
-                        alt.layer(donut, labels).properties(height=380, width=380),
-                        use_container_width=True,
-                    )
-                    st.markdown('<div style="margin-top:8px;">', unsafe_allow_html=True)
-                    for i, n in enumerate(top3):
-                        medal = ["🥇", "🥈", "🥉"][i]
-                        st.markdown(
-                            f'<div style="display:flex;justify-content:space-between;'
-                            f'padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">'
-                            f'<span style="color:#e2e8f0;font-size:13px;">{medal} {n["neighborhood"]}</span>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-                    st.markdown('</div>', unsafe_allow_html=True)
             else:
                 st.info("Safety data not available.")
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Row 2: Most affordable + Best transit
-        col_afford, col_transit = st.columns(2, gap="medium")
-
-        with col_afford:
+        with col_h:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown(
-                '<div class="section-title">Most Affordable — Top 10</div>'
-                '<div class="section-subtitle">Higher score = more affordable relative to Boston market</div>',
-                unsafe_allow_html=True,
-            )
-            if affordable_list:
-                df_afford = pd.DataFrame(affordable_list)
-                bars = alt.Chart(df_afford).mark_bar(
-                    cornerRadiusTopRight=5, cornerRadiusBottomRight=5,
-                ).encode(
-                    y=alt.Y("neighborhood:N", sort=None,
-                            axis=alt.Axis(title=None, labelFontSize=11,
-                                          labelLimit=160, labelFontWeight="bold")),
-                    x=alt.X("score:Q", scale=alt.Scale(domain=[0, 100]),
-                            axis=alt.Axis(title="Affordability Score", grid=True)),
-                    tooltip=["neighborhood:N",
-                             alt.Tooltip("score:Q", format=".1f"),
-                             "grade:N",
-                             alt.Tooltip("avg_monthly_rent:Q", title="Avg Rent $", format=",.0f"),
-                             alt.Tooltip("price_per_sqft:Q", title="$/sqft", format=".2f")],
-                    color=alt.Color("score:Q",
-                    scale=alt.Scale(domain=[60, 80], range=["#95d5b2", "#1b4332"]),
-                    legend=None),
+            st.markdown('<div class="section-title">🏠 Housing</div>', unsafe_allow_html=True)
+            if housing_n:
+                hg = housing_n.get("housing_grade", "—")
+                hg_color = {"AFFORDABLE":"#1E8449","AVERAGE":"#F59E0B",
+                            "PREMIUM":"#C0392B","BELOW_AVERAGE":"#7f8c8d"}.get(hg, "#64748b")
+                rent = housing_n.get("avg_monthly_rent")
+                sqft = housing_n.get("avg_price_per_sqft")
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;margin-bottom:12px;">'
+                    f'<span style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{housing_n.get("housing_score","—")}</span>'
+                    f'<span style="background:{hg_color}22;color:{hg_color};border:1px solid {hg_color}44;'
+                    f'padding:4px 12px;border-radius:999px;font-weight:700;font-size:12px;align-self:center;">{hg}</span>'
+                    f'</div>', unsafe_allow_html=True,
                 )
-                labels = alt.Chart(df_afford).mark_text(
-                    align="left", dx=4, fontSize=11, fontWeight="bold", color="#e2e8f0",
-                ).encode(
-                    y=alt.Y("neighborhood:N", sort=None),
-                    x=alt.X("score:Q"),
-                    text=alt.Text("score:Q", format=".0f"),
-                )
-                st.altair_chart(alt.layer(bars, labels).properties(height=380),
-                                use_container_width=True)
+                for label, val in [
+                    ("Avg Monthly Rent", f'${rent:,.0f}/mo' if rent else "—"),
+                    ("Price per Sqft",   f'${sqft:.2f}' if sqft else "—"),
+                    ("Avg Living Area",  f'{housing_n.get("avg_living_area_sqft","—")} sqft'),
+                    ("Avg Bedrooms",     f'{housing_n.get("avg_bedrooms","—")} bd'),
+                    ("Property Age",     f'{housing_n.get("avg_property_age","—")} yrs'),
+                    ("Total Properties", f'{housing_n.get("total_properties","—"):,}' if housing_n.get("total_properties") else "—"),
+                ]:
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;padding:5px 0;'
+                        f'border-bottom:1px solid rgba(255,255,255,0.06);">'
+                        f'<span style="color:rgba(255,255,255,0.45);font-size:12px;">{label}</span>'
+                        f'<span style="color:#e2e8f0;font-size:12px;font-weight:500;">{val}</span></div>',
+                        unsafe_allow_html=True,
+                    )
             else:
                 st.info("Housing data not available.")
             st.markdown('</div>', unsafe_allow_html=True)
 
-        with col_transit:
-            st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown(
-                '<div class="section-title">Best Transit — Top 5</div>'
-                '<div class="section-subtitle">Rapid transit lines · Stop coverage</div>',
-                unsafe_allow_html=True,
-            )
-            if transit_list:
-                LINE_PILL_COLORS = {
-                    "red":      ("#ef4444", "#fff"),
-                    "green":    ("#22c55e", "#fff"),
-                    "orange":   ("#f97316", "#fff"),
-                    "blue":     ("#3b82f6", "#fff"),
-                    "mattapan": ("#ef4444", "#fff"),
-                    "silver":   ("#94a3b8", "#fff"),
-                }
-                GRADE_COLORS = {
-                    "EXCELLENT": "#22c55e",
-                    "GOOD":      "#60a5fa",
-                    "MODERATE":  "#fbbf24",
-                    "LIMITED":   "#f87171",
-                }
+        # ── Transit + Grocery ─────────────────────────────────────────────────
+        col_t, col_g = st.columns(2, gap="medium")
 
-                def line_pills(lines_str):
-                    if not lines_str:
-                        return '<span style="color:rgba(255,255,255,0.3);font-size:11px;">Bus only</span>'
+        with col_t:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">🚇 Transit</div>', unsafe_allow_html=True)
+            if transit_n:
+                tg = transit_n.get("transit_grade", "—")
+                tg_color = {"EXCELLENT":"#1E8449","GOOD":"#82E0AA",
+                            "MODERATE":"#F1C40F","LIMITED":"#C0392B"}.get(tg, "#64748b")
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;margin-bottom:12px;">'
+                    f'<span style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{transit_n.get("transit_score","—")}</span>'
+                    f'<span style="background:{tg_color}22;color:{tg_color};border:1px solid {tg_color}44;'
+                    f'padding:4px 12px;border-radius:999px;font-weight:700;font-size:12px;align-self:center;">{tg}</span>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+                lines = transit_n.get("rapid_transit_lines")
+                if lines:
+                    LINE_PILL_COLORS_M3 = {
+                        "red":      ("#ef4444","#fff"), "green":    ("#22c55e","#fff"),
+                        "orange":   ("#f97316","#fff"), "blue":     ("#3b82f6","#fff"),
+                        "mattapan": ("#ef4444","#fff"),
+                    }
                     pills = ""
-                    for line in lines_str.split(","):
+                    for line in lines.split(","):
                         line = line.strip()
-                        color, text_color = "#64748b", "#fff"
-                        for key, (bg, fg) in LINE_PILL_COLORS.items():
-                            if key in line.lower():
-                                color, text_color = bg, fg
-                                break
-                        pills += (
-                            f'<span style="background:{color};color:{text_color};'
-                            f'padding:2px 8px;border-radius:999px;font-size:10px;'
-                            f'font-weight:700;margin-right:4px;">{line}</span>'
-                        )
-                    return pills
-                # Sort by total routes for more meaningful ranking
-                transit_sorted = sorted(
-                    transit_list,
-                    key=lambda x: (x.get("score", 0) or 0, x.get("total_routes", 0) or 0),
-                    reverse=True
-                )[:5]
-                for n in transit_sorted:
-                    lines = n.get("rapid_transit_lines")
-                    routes = n.get("total_routes", "—")
+                        bg, fg = "#64748b", "#fff"
+                        for k, (b, f) in LINE_PILL_COLORS_M3.items():
+                            if k in line.lower(): bg, fg = b, f; break
+                        pills += (f'<span style="background:{bg};color:{fg};padding:2px 8px;'
+                                  f'border-radius:999px;font-size:10px;font-weight:700;'
+                                  f'margin-right:4px;">{line}</span>')
+                    st.markdown(f'<div style="margin-bottom:8px;">{pills}</div>', unsafe_allow_html=True)
+                for label, val in [
+                    ("Total Stops",         transit_n.get("total_stops", "—")),
+                    ("Rapid Transit Stops", transit_n.get("rapid_transit_stops", "—")),
+                    ("Bus Stops",           transit_n.get("bus_stops", "—")),
+                    ("Total Routes",        transit_n.get("total_routes", "—")),
+                    ("% Accessible",        f'{transit_n.get("pct_accessible_stops","—")}%'),
+                ]:
                     st.markdown(
-                        f'<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">'
-                        f'<div style="font-weight:600;font-size:13px;color:#e2e8f0;margin-bottom:4px;">'
-                        f'{n["neighborhood"]}</div>'
-                        f'<div>{line_pills(lines)}</div>'
-                        f'<div style="color:rgba(255,255,255,0.3);font-size:10px;margin-top:3px;">'
-                        f'{routes} routes</div>'
-                        f'</div>',
+                        f'<div style="display:flex;justify-content:space-between;padding:5px 0;'
+                        f'border-bottom:1px solid rgba(255,255,255,0.06);">'
+                        f'<span style="color:rgba(255,255,255,0.45);font-size:12px;">{label}</span>'
+                        f'<span style="color:#e2e8f0;font-size:12px;font-weight:500;">{val}</span></div>',
                         unsafe_allow_html=True,
                     )
             else:
                 st.info("Transit data not available.")
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Row 3: Best overall livability
+        with col_g:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">🛒 Grocery</div>', unsafe_allow_html=True)
+            if grocery_n:
+                gg = grocery_n.get("grocery_grade", "—")
+                gg_color = {"WELL_STOCKED":"#1E8449","ADEQUATE":"#82E0AA",
+                            "MODERATE":"#F1C40F","FOOD_DESERT":"#C0392B"}.get(gg, "#64748b")
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;margin-bottom:12px;">'
+                    f'<span style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{grocery_n.get("grocery_score","—")}</span>'
+                    f'<span style="background:{gg_color}22;color:{gg_color};border:1px solid {gg_color}44;'
+                    f'padding:4px 12px;border-radius:999px;font-weight:700;font-size:12px;align-self:center;">{gg.replace("_"," ").title()}</span>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+                for label, val in [
+                    ("Total Stores",       grocery_n.get("total_stores", "—")),
+                    ("Supermarkets",       grocery_n.get("supermarkets", "—")),
+                    ("Pharmacies",         grocery_n.get("pharmacies", "—")),
+                    ("Farmers Markets",    grocery_n.get("farmers_markets", "—")),
+                    ("Stores per Sq Mile", f'{grocery_n.get("stores_per_sqmile","—")}'),
+                    ("% Essential",        f'{grocery_n.get("pct_essential","—")}%'),
+                ]:
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;padding:5px 0;'
+                        f'border-bottom:1px solid rgba(255,255,255,0.06);">'
+                        f'<span style="color:rgba(255,255,255,0.45);font-size:12px;">{label}</span>'
+                        f'<span style="color:#e2e8f0;font-size:12px;font-weight:500;">{val}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.info("Grocery data not available.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Schools + Healthcare ──────────────────────────────────────────────
+        col_sc, col_hc = st.columns(2, gap="medium")
+
+        with col_sc:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">🏫 Schools</div>', unsafe_allow_html=True)
+            if school_n:
+                sg = school_n.get("school_grade", "—")
+                sg_color = {"EXCELLENT":"#1E8449","GOOD":"#82E0AA",
+                            "MODERATE":"#F1C40F","LIMITED":"#C0392B"}.get(sg, "#64748b")
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;margin-bottom:12px;">'
+                    f'<span style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{school_n.get("school_score","—")}</span>'
+                    f'<span style="background:{sg_color}22;color:{sg_color};border:1px solid {sg_color}44;'
+                    f'padding:4px 12px;border-radius:999px;font-weight:700;font-size:12px;align-self:center;">{sg}</span>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+                for label, val in [
+                    ("Total Schools", school_n.get("total_schools", "—")),
+                    ("Public",        school_n.get("public", "—")),
+                    ("Private",       school_n.get("private", "—")),
+                    ("Charter",       school_n.get("charter", "—")),
+                    ("Elementary",    school_n.get("elementary", "—")),
+                    ("Middle School", school_n.get("middle", "—")),
+                    ("High School",   school_n.get("high_school", "—")),
+                ]:
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;padding:5px 0;'
+                        f'border-bottom:1px solid rgba(255,255,255,0.06);">'
+                        f'<span style="color:rgba(255,255,255,0.45);font-size:12px;">{label}</span>'
+                        f'<span style="color:#e2e8f0;font-size:12px;font-weight:500;">{val}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.info("School data not available.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_hc:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-title">🏥 Healthcare</div>', unsafe_allow_html=True)
+            if health_n:
+                hg = health_n.get("healthcare_grade", "—")
+                hg_color = {"EXCELLENT":"#1E8449","GOOD":"#82E0AA",
+                            "MODERATE":"#F1C40F","LIMITED":"#C0392B"}.get(hg, "#64748b")
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;margin-bottom:12px;">'
+                    f'<span style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{health_n.get("healthcare_score","—")}</span>'
+                    f'<span style="background:{hg_color}22;color:{hg_color};border:1px solid {hg_color}44;'
+                    f'padding:4px 12px;border-radius:999px;font-weight:700;font-size:12px;align-self:center;">{hg}</span>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+                for label, val in [
+                    ("Total Facilities",  health_n.get("total_facilities", "—")),
+                    ("Hospitals",         health_n.get("hospitals", "—")),
+                    ("Clinics",           health_n.get("clinics", "—")),
+                    ("Bed Capacity",      health_n.get("total_bed_capacity", "—")),
+                    ("Facilities/SqMile", f'{health_n.get("facilities_per_sqmile","—")}'),
+                    ("Density Score",     f'{health_n.get("density_score","—")}'),
+                ]:
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;padding:5px 0;'
+                        f'border-bottom:1px solid rgba(255,255,255,0.06);">'
+                        f'<span style="color:rgba(255,255,255,0.45);font-size:12px;">{label}</span>'
+                        f'<span style="color:#e2e8f0;font-size:12px;font-weight:500;">{val}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.info("Healthcare data not available.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Geographic Neighbors Comparison ───────────────────────────────────
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.markdown(
-            '<div class="section-title">Best Overall Livability — Top 10</div>'
-            '<div class="section-subtitle">Weighted composite across 9 domains</div>',
+            f'<div class="section-title">Neighbors of {hood_filter}</div>'
+            f'<div class="section-subtitle">8 geographically closest neighborhoods · overall score comparison</div>',
             unsafe_allow_html=True,
         )
-        if overall_list:
-            matrix = load_domain_matrix(hood_filter, limit=15)
-            nbhds  = matrix.get("neighborhoods", [])
 
-            if nbhds:
-                domain_cols = ["Safety", "Housing", "Transit", "Grocery",
-                            "Healthcare", "Schools", "Restaurants",
-                            "Universities", "Bluebikes"]
+        neighbors_data = load_neighbors(hood_filter, limit=8)
+        neighbors      = neighbors_data.get("neighbors", [])
 
-                rows = []
-                for n in nbhds:
-                    for d in domain_cols:
-                        rows.append({
-                            "neighborhood": n["neighborhood"],
-                            "Domain":       d,
-                            "Score":        n.get(d) or 0,
-                            "master_score": n.get("master_score", 0),
-                            "strength":     n.get("top_strength", ""),
-                            "weakness":     n.get("top_weakness", ""),
-                        })
-                df_heat = pd.DataFrame(rows)
+        if neighbors and nbhd_data:
+            # Build dataframe including the selected neighborhood itself
+            rows = [{
+                "neighborhood": hood_filter,
+                "master_score": nbhd_data.get("master_score") or 0,
+                "master_grade": nbhd_data.get("master_grade", ""),
+                "distance_km":  0,
+                "is_selected":  True,
+            }] + [{
+                "neighborhood": n["neighborhood"],
+                "master_score": n.get("master_score") or 0,
+                "master_grade": n.get("master_grade", ""),
+                "distance_km":  n.get("distance_km") or 0,
+                "is_selected":  False,
+            } for n in neighbors]
 
-                heatmap = alt.Chart(df_heat).mark_rect(
-                    stroke="#1a1a2e", strokeWidth=1,
-                ).encode(
-                    x=alt.X("Domain:N",
-                            sort=domain_cols,
-                            axis=alt.Axis(title=None, labelAngle=-30,
-                                        labelFontSize=11, labelFontWeight="bold")),
-                    y=alt.Y("neighborhood:N",
-                            sort=alt.EncodingSortField("master_score", order="descending"),
-                            axis=alt.Axis(title=None, labelFontSize=11,
-                                        labelFontWeight="bold")),
-                    color=alt.Color("Score:Q",
-                                    scale=alt.Scale(domain=[0, 100],
-                                                    range=["#1e3a5f", "#52b788"]),
-                                    legend=alt.Legend(title="Score", orient="right")),
-                    tooltip=[
-                        "neighborhood:N",
-                        "Domain:N",
-                        alt.Tooltip("Score:Q", format=".1f", title="Score"),
-                        alt.Tooltip("strength:N", title="Strength"),
-                        alt.Tooltip("weakness:N", title="Weakness"),
-                    ],
-                )
+            df_nb = pd.DataFrame(rows)
+            df_nb["is_selected"] = df_nb["is_selected"].astype(bool)
 
-                # Score text inside cells
-                text = alt.Chart(df_heat).mark_text(
-                    fontSize=10, fontWeight="bold",
-                ).encode(
-                    x=alt.X("Domain:N", sort=domain_cols),
-                    y=alt.Y("neighborhood:N",
-                            sort=alt.EncodingSortField("master_score", order="descending")),
-                    text=alt.Text("Score:Q", format=".0f"),
-                    color=alt.condition(
-                        alt.datum.Score > 50,
-                        alt.value("#0f172a"),
-                        alt.value("#e2e8f0"),
-                    ),
-                )
+            GRADE_COLORS_NB = {
+                "TOP PICK":       "#22c55e",
+                "SOLID CHOICE":   "#60a5fa",
+                "MODERATE PICK":  "#fbbf24",
+                "LIMITED APPEAL": "#f87171",
+            }
+            df_nb["color"] = df_nb.apply(
+                lambda r: "#ffffff" if r["is_selected"]
+                else GRADE_COLORS_NB.get(r["master_grade"], "#64748b"),
+                axis=1
+            )
+            df_nb["label_color"] = df_nb["is_selected"].apply(
+                lambda x: "#52b788" if x else "#e2e8f0"
+            )
+            df_nb["opacity"] = df_nb["is_selected"].apply(lambda x: 1.0 if x else 0.6)
+            df_nb["dist_label"] = df_nb["distance_km"].apply(
+                lambda x: "← selected" if x == 0 else f"{x:.1f} km away"
+            )
 
-                st.altair_chart(
-                    alt.layer(heatmap, text).properties(height=420),
-                    use_container_width=True,
-                )
+            bars = alt.Chart(df_nb).mark_bar(
+                cornerRadiusTopRight=5, cornerRadiusBottomRight=5,
+            ).encode(
+                y=alt.Y("neighborhood:N",
+                        sort=alt.EncodingSortField("master_score", order="descending"),
+                        axis=alt.Axis(title=None, labelFontSize=12, labelLimit=200)),
+                x=alt.X("master_score:Q",
+                        scale=alt.Scale(domain=[0, 100]),
+                        axis=alt.Axis(title="Overall Score", grid=True)),
+                color=alt.Color("color:N", scale=None, legend=None),
+                opacity=alt.Opacity("opacity:Q", scale=None, legend=None),
+                tooltip=[
+                    alt.Tooltip("neighborhood:N",  title="Neighborhood"),
+                    alt.Tooltip("master_score:Q",  title="Overall Score", format=".1f"),
+                    alt.Tooltip("master_grade:N",  title="Grade"),
+                    alt.Tooltip("dist_label:N",    title="Distance"),
+                ],
+            )
 
+            score_labels = alt.Chart(df_nb).mark_text(
+                align="left", dx=4, fontSize=11, fontWeight="bold",
+            ).encode(
+                y=alt.Y("neighborhood:N",
+                        sort=alt.EncodingSortField("master_score", order="descending")),
+                x=alt.X("master_score:Q"),
+                text=alt.Text("master_score:Q", format=".0f"),
+                color=alt.condition(
+                    alt.datum.is_selected == True,
+                    alt.value("#52b788"),
+                    alt.value("#e2e8f0"),
+                ),
+            )
 
-    # ── Mode 2: Domain selected — deep dive ───────────────────────────────────
-    else:
+            st.altair_chart(
+                alt.layer(bars, score_labels).properties(height=320),
+                use_container_width=True,
+            )
+
+            # Best and worst among neighbors
+            best_nb  = max(neighbors, key=lambda x: x.get("master_score") or 0)
+            worst_nb = min(neighbors, key=lambda x: x.get("master_score") or 0)
+            this_score = nbhd_data.get("master_score") or 0
+            better_count = sum(1 for n in neighbors if (n.get("master_score") or 0) < this_score)
+
+            avg_neighbor_score = round(sum(n.get("master_score") or 0 for n in neighbors) / len(neighbors), 1)
+            score_vs_avg = int(this_score) - int(avg_neighbor_score)
+            vs_avg_str = f'+{score_vs_avg} above' if score_vs_avg >= 0 else f'{score_vs_avg} below'
+            best_grade  = best_nb.get("master_grade", "—")
+            worst_grade = worst_nb.get("master_grade", "—")
+
+            st.markdown(
+                f'<div class="narrative-box" style="margin-top:8px;line-height:1.9;">'
+                f'<div style="margin-bottom:4px;">'
+                f'📍 <b>{hood_filter}</b> scores <b>{int(this_score)}/100</b> — '
+                f'<b>{vs_avg_str}</b> the neighborhood average of <b>{avg_neighbor_score}</b> '
+                f'and outperforms <b>{better_count} of {len(neighbors)}</b> nearest neighbors.</div>'
+                f'<div style="margin-bottom:4px;">'
+                f'🏆 Top performer nearby: <b>{best_nb["neighborhood"]}</b> '
+                f'({int(best_nb["master_score"] or 0)}/100 · {best_grade}) — '
+                f'{round(best_nb.get("distance_km") or 0, 1)} km away.</div>'
+                f'<div>'
+                f'📉 Lowest nearby: <b>{worst_nb["neighborhood"]}</b> '
+                f'({int(worst_nb["master_score"] or 0)}/100 · {worst_grade}) — '
+                f'{round(worst_nb.get("distance_km") or 0, 1)} km away.</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("Neighbor data not available.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 2: Domain selected → Domain Deep Dive
+    # ══════════════════════════════════════════════════════════════════════════
+    elif domain_filter:
+
         domain_data = load_domain(domain_filter, hood_filter)
 
         st.markdown(
@@ -799,15 +1152,14 @@ with tab_overview:
             unsafe_allow_html=True,
         )
 
-        # ── SAFETY deep dive ──────────────────────────────────────────────────
+        # ── SAFETY ────────────────────────────────────────────────────────────
         if domain_filter == "Safety":
-            scores   = domain_data.get("scores", [])
-            hotspots = domain_data.get("hotspots", [])
+            scores    = domain_data.get("scores", [])
+            hotspots  = domain_data.get("hotspots", [])
             narrative = domain_data.get("narrative", [])
             forecasts = domain_data.get("forecasts", [])
 
             col1, col2 = st.columns(2, gap="medium")
-
             with col1:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">Safety Scores</div>', unsafe_allow_html=True)
@@ -822,8 +1174,8 @@ with tab_overview:
                                 axis=alt.Axis(title="Safety Score")),
                         color=alt.Color("safety_grade:N",
                                         scale=alt.Scale(
-                                            domain=["EXCELLENT", "GOOD", "MODERATE", "HIGH CONCERN"],
-                                            range=["#1E8449", "#82E0AA", "#F1C40F", "#C0392B"]),
+                                            domain=["EXCELLENT","GOOD","MODERATE","HIGH CONCERN"],
+                                            range=["#1E8449","#82E0AA","#F1C40F","#C0392B"]),
                                         legend=None),
                         tooltip=["neighborhood:N",
                                  alt.Tooltip("safety_score:Q", format=".1f"),
@@ -854,22 +1206,19 @@ with tab_overview:
                     st.altair_chart(bars.properties(height=500), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            # SARIMAX forecasts
             if forecasts:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">SARIMAX Forecasts — Next 6 Months</div>',
                             unsafe_allow_html=True)
                 df_f = pd.DataFrame(forecasts)
-                # Only show HIGH reliability if available
-                high_hoods = {n["neighborhood"] for n in narrative
-                              if n.get("reliability") == "HIGH"}
+                high_hoods = {n["neighborhood"] for n in narrative if n.get("reliability") == "HIGH"}
                 if high_hoods:
                     df_f = df_f[df_f["neighborhood"].isin(high_hoods)]
                 line = alt.Chart(df_f).mark_line(point=True).encode(
                     x=alt.X("forecast_month:N", axis=alt.Axis(title="Month", labelAngle=-30)),
                     y=alt.Y("forecasted_count:Q", axis=alt.Axis(title="Forecasted Crimes")),
                     color=alt.Color("neighborhood:N", legend=alt.Legend(title="Neighborhood")),
-                    tooltip=["neighborhood:N", "forecast_month:N",
+                    tooltip=["neighborhood:N","forecast_month:N",
                              alt.Tooltip("forecasted_count:Q", title="Forecast"),
                              alt.Tooltip("lower_ci:Q", title="Lower CI"),
                              alt.Tooltip("upper_ci:Q", title="Upper CI")],
@@ -877,24 +1226,22 @@ with tab_overview:
                 st.altair_chart(line.properties(height=350), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            # Narrative table
             if narrative:
                 with st.expander("📋 Full Safety Narrative Table", expanded=False):
                     df_n = pd.DataFrame(narrative)[
-                        ["neighborhood", "recent_trend", "recent_avg_monthly",
-                         "forecasted_count", "hotspot_clusters", "reliability"]
+                        ["neighborhood","recent_trend","recent_avg_monthly",
+                         "forecasted_count","hotspot_clusters","reliability"]
                     ]
-                    df_n.columns = ["Neighborhood", "Trend", "Avg Monthly",
-                                    "Forecast", "Hotspot Clusters", "Reliability"]
+                    df_n.columns = ["Neighborhood","Trend","Avg Monthly",
+                                    "Forecast","Hotspot Clusters","Reliability"]
                     st.dataframe(df_n, use_container_width=True, hide_index=True)
 
-        # ── HOUSING deep dive ─────────────────────────────────────────────────
+        # ── HOUSING ───────────────────────────────────────────────────────────
         elif domain_filter == "Housing":
             neighborhoods_data = domain_data.get("neighborhoods", [])
-            grade_dist = domain_data.get("grade_distribution", {})
+            grade_dist         = domain_data.get("grade_distribution", {})
 
             col1, col2 = st.columns([1.5, 1], gap="medium")
-
             with col1:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">Affordability Scores</div>', unsafe_allow_html=True)
@@ -910,8 +1257,8 @@ with tab_overview:
                                 axis=alt.Axis(title="Housing Score")),
                         color=alt.Color("housing_grade:N",
                                         scale=alt.Scale(
-                                            domain=["AFFORDABLE", "AVERAGE", "PREMIUM", "BELOW_AVERAGE"],
-                                            range=["#1E8449", "#F59E0B", "#C0392B", "#7f8c8d"]),
+                                            domain=["AFFORDABLE","AVERAGE","PREMIUM","BELOW_AVERAGE"],
+                                            range=["#1E8449","#F59E0B","#C0392B","#7f8c8d"]),
                                         legend=alt.Legend(title="Grade", orient="bottom")),
                         tooltip=["neighborhood:N",
                                  alt.Tooltip("housing_score:Q", format=".1f"),
@@ -931,14 +1278,12 @@ with tab_overview:
                         theta=alt.Theta("Count:Q"),
                         color=alt.Color("Grade:N",
                                         scale=alt.Scale(
-                                            domain=["AFFORDABLE", "AVERAGE", "PREMIUM", "BELOW_AVERAGE"],
-                                            range=["#1E8449", "#F59E0B", "#C0392B", "#7f8c8d"]),
+                                            domain=["AFFORDABLE","AVERAGE","PREMIUM","BELOW_AVERAGE"],
+                                            range=["#1E8449","#F59E0B","#C0392B","#7f8c8d"]),
                                         legend=alt.Legend(title=None)),
-                        tooltip=["Grade:N", "Count:Q"],
+                        tooltip=["Grade:N","Count:Q"],
                     )
                     st.altair_chart(donut.properties(height=260), use_container_width=True)
-
-                # Rent scatter
                 if neighborhoods_data:
                     st.markdown('<div class="section-title" style="margin-top:12px;">Rent vs Score</div>',
                                 unsafe_allow_html=True)
@@ -958,11 +1303,11 @@ with tab_overview:
                         st.altair_chart(scatter.properties(height=220), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── TRANSIT deep dive ─────────────────────────────────────────────────
+        # ── TRANSIT ───────────────────────────────────────────────────────────
         elif domain_filter == "Transit":
-            mbta    = domain_data.get("mbta", [])
-            bikes   = domain_data.get("bluebikes", [])
-            summary = domain_data.get("summary", {})
+            mbta     = domain_data.get("mbta", [])
+            bikes    = domain_data.get("bluebikes", [])
+            summary  = domain_data.get("summary", {})
             map_data = load_map()
             features = map_data.get("features", [])
 
@@ -976,149 +1321,97 @@ with tab_overview:
                 unsafe_allow_html=True,
             )
 
-            # ── Transit map ───────────────────────────────────────────────────────
             if mbta and features:
                 import pydeck as pdk
-
-                # Grade → color mapping (transit blue palette)
                 TRANSIT_FILL = {
-                    "EXCELLENT": [29,  78,  216, 200],   # deep blue
-                    "GOOD":      [96,  165, 250, 180],   # mid blue
-                    "MODERATE":  [186, 230, 253, 160],   # light blue
-                    "LIMITED":   [71,  85,  105, 140],   # grey
+                    "EXCELLENT": [29,  78,  216, 200],
+                    "GOOD":      [96,  165, 250, 180],
+                    "MODERATE":  [186, 230, 253, 160],
+                    "LIMITED":   [71,  85,  105, 140],
                 }
-
-                # Build centroid lookup
                 centroid_lookup = {
                     f["properties"]["neighborhood"].upper(): {
                         "lat": f["properties"]["latitude"],
                         "lng": f["properties"]["longitude"],
                     }
-                    for f in features
-                    if f["properties"].get("latitude")
+                    for f in features if f["properties"].get("latitude")
                 }
-
-                # Enrich GeoJSON features with transit grade colors
                 transit_features = []
                 for f in features:
                     nbhd = f["properties"]["neighborhood"].upper()
-                    # Find matching MBTA row
-                    mbta_row = next((r for r in mbta
-                                    if r["neighborhood"].upper() == nbhd), None)
-                    if not mbta_row:
-                        continue
+                    mbta_row = next((r for r in mbta if r["neighborhood"].upper() == nbhd), None)
+                    if not mbta_row: continue
                     grade = str(mbta_row.get("transit_grade", "MODERATE")).upper()
                     lines = mbta_row.get("rapid_transit_lines") or "Bus only"
                     transit_features.append({
-                        "type": "Feature",
-                        "geometry": f["geometry"],
+                        "type": "Feature", "geometry": f["geometry"],
                         "properties": {
-                            "neighborhood": f["properties"]["neighborhood"],
+                            "neighborhood":  f["properties"]["neighborhood"],
                             "transit_score": mbta_row.get("transit_score", 0),
-                            "transit_grade": grade,
-                            "lines": lines,
-                            "total_stops": mbta_row.get("total_stops", 0),
-                            "rapid_stops": mbta_row.get("rapid_transit_stops", 0),
-                            "total_routes": mbta_row.get("total_routes", 0),
-                            "accessible_pct": mbta_row.get("pct_accessible_stops", 0),
-                            "fill_color": TRANSIT_FILL.get(grade, [100, 100, 100, 140]),
+                            "transit_grade": grade, "lines": lines,
+                            "total_stops":   mbta_row.get("total_stops", 0),
+                            "rapid_stops":   mbta_row.get("rapid_transit_stops", 0),
+                            "total_routes":  mbta_row.get("total_routes", 0),
+                            "accessible_pct":mbta_row.get("pct_accessible_stops", 0),
+                            "fill_color":    TRANSIT_FILL.get(grade, [100, 100, 100, 140]),
                         }
                     })
-
-                # Scatter layer for neighborhood centroids
-                # Color circles by dominant MBTA line color
                 LINE_COLORS = {
-                    "Red Line":    [239, 68,  68,  230],
-                    "Green":       [34,  197, 94,  230],
-                    "Blue Line":   [59,  130, 246, 230],
-                    "Orange Line": [249, 115, 22,  230],
-                    "Mattapan":    [239, 68,  68,  200],
-                    "Silver":      [148, 163, 184, 200],
+                    "Red Line":   [239, 68,  68,  230], "Green":      [34,  197, 94,  230],
+                    "Blue Line":  [59,  130, 246, 230], "Orange Line":[249, 115, 22,  230],
+                    "Mattapan":   [239, 68,  68,  200], "Silver":     [148, 163, 184, 200],
                 }
-
                 scatter_data = []
                 for r in mbta:
-                    nbhd_upper = r["neighborhood"].upper()
-                    coords = centroid_lookup.get(nbhd_upper)
-                    if not coords:
-                        continue
+                    coords = centroid_lookup.get(r["neighborhood"].upper())
+                    if not coords: continue
                     lines = r.get("rapid_transit_lines") or ""
-                    # Pick circle color based on first rapid transit line
-                    circle_color = [148, 163, 184, 200]  # default grey
+                    circle_color = [148, 163, 184, 200]
                     for line_key, color in LINE_COLORS.items():
-                        if line_key.lower() in lines.lower():
-                            circle_color = color
-                            break
+                        if line_key.lower() in lines.lower(): circle_color = color; break
                     scatter_data.append({
-                        "name":           r["neighborhood"],
-                        "lat":            coords["lat"],
-                        "lng":            coords["lng"],
-                        "transit_score":  r.get("transit_score", 0) or 0,
-                        "transit_grade":  r.get("transit_grade", ""),
-                        "lines":          lines if lines else "Bus only",
-                        "total_stops":    r.get("total_stops", 0) or 0,
-                        "rapid_stops":    r.get("rapid_transit_stops", 0) or 0,
-                        "total_routes":   r.get("total_routes", 0) or 0,
+                        "name": r["neighborhood"], "lat": coords["lat"], "lng": coords["lng"],
+                        "transit_score": r.get("transit_score", 0) or 0,
+                        "transit_grade": r.get("transit_grade", ""),
+                        "lines": lines if lines else "Bus only",
+                        "total_stops": r.get("total_stops", 0) or 0,
+                        "rapid_stops": r.get("rapid_transit_stops", 0) or 0,
+                        "total_routes": r.get("total_routes", 0) or 0,
                         "accessible_pct": r.get("pct_accessible_stops", 0) or 0,
-                        "color":          circle_color,
-                        "radius":         max(200, min(600,
-                                            (r.get("rapid_transit_stops", 0) or 0) * 80 + 200)),
+                        "color": circle_color,
+                        "radius": max(200, min(600, (r.get("rapid_transit_stops", 0) or 0) * 80 + 200)),
                     })
-
                 geojson_layer = pdk.Layer(
                     "GeoJsonLayer",
                     data={"type": "FeatureCollection", "features": transit_features},
-                    filled=True,
-                    stroked=True,
-                    pickable=True,
-                    auto_highlight=True,
+                    filled=True, stroked=True, pickable=True, auto_highlight=True,
                     get_fill_color="properties.fill_color",
-                    get_line_color=[255, 255, 255, 60],
-                    line_width_min_pixels=1,
+                    get_line_color=[255, 255, 255, 60], line_width_min_pixels=1,
                 )
-
                 scatter_layer = pdk.Layer(
-                    "ScatterplotLayer",
-                    data=pd.DataFrame(scatter_data),
-                    get_position=["lng", "lat"],
-                    get_fill_color="color",
-                    get_radius="radius",
-                    pickable=True,
-                    auto_highlight=True,
-                    opacity=0.9,
+                    "ScatterplotLayer", data=pd.DataFrame(scatter_data),
+                    get_position=["lng", "lat"], get_fill_color="color",
+                    get_radius="radius", pickable=True, auto_highlight=True, opacity=0.9,
                 )
-
                 lats = [d["lat"] for d in scatter_data]
                 lngs = [d["lng"] for d in scatter_data]
                 view = pdk.ViewState(
-                    latitude=sum(lats) / len(lats) if lats else 42.36,
-                    longitude=sum(lngs) / len(lngs) if lngs else -71.06,
+                    latitude=sum(lats)/len(lats) if lats else 42.36,
+                    longitude=sum(lngs)/len(lngs) if lngs else -71.06,
                     zoom=10.5, pitch=0,
                 )
-
                 deck = pdk.Deck(
-                    layers=[geojson_layer, scatter_layer],
-                    initial_view_state=view,
+                    layers=[geojson_layer, scatter_layer], initial_view_state=view,
                     tooltip={
-                        "html": "<b>{name}</b><br/>"
-                                "Score: <b>{transit_score}</b>/100 · <b>{transit_grade}</b><br/>"
-                                "Lines: <b>{lines}</b><br/>"
-                                "Stops: {total_stops} total · {rapid_stops} rapid transit<br/>"
+                        "html": "<b>{name}</b><br/>Score: <b>{transit_score}</b>/100 · <b>{transit_grade}</b><br/>"
+                                "Lines: <b>{lines}</b><br/>Stops: {total_stops} total · {rapid_stops} rapid<br/>"
                                 "Routes: {total_routes} · Accessible: {accessible_pct}%",
-                        "style": {
-                            "backgroundColor": "#1e293b",
-                            "color": "#e2e8f0",
-                            "fontSize": "12px",
-                            "borderRadius": "8px",
-                            "padding": "8px",
-                        },
+                        "style": {"backgroundColor":"#1e293b","color":"#e2e8f0",
+                                  "fontSize":"12px","borderRadius":"8px","padding":"8px"},
                     },
                     map_style="mapbox://styles/mapbox/dark-v10",
                 )
-
                 st.pydeck_chart(deck, use_container_width=True, height=540)
-
-                # Legend — transit grades + line colors
                 st.markdown(
                     '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:8px;">'
                     '<span style="color:#1d4ed8;font-weight:600;">■ Excellent</span>'
@@ -1137,9 +1430,7 @@ with tab_overview:
             else:
                 st.info("Transit map data not available.")
 
-            # ── Bar charts below map ──────────────────────────────────────────────
             col1, col2 = st.columns(2, gap="medium")
-
             with col1:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">MBTA Transit Scores</div>', unsafe_allow_html=True)
@@ -1153,11 +1444,10 @@ with tab_overview:
                         x=alt.X("transit_score:Q", scale=alt.Scale(domain=[0, 100]),
                                 axis=alt.Axis(title="Transit Score")),
                         tooltip=["neighborhood:N",
-                                alt.Tooltip("transit_score:Q", format=".1f"),
-                                "transit_grade:N",
-                                "rapid_transit_lines:N",
-                                alt.Tooltip("total_routes:Q", title="Routes"),
-                                alt.Tooltip("pct_accessible_stops:Q", title="% Accessible", format=".1f")],
+                                 alt.Tooltip("transit_score:Q", format=".1f"),
+                                 "transit_grade:N", "rapid_transit_lines:N",
+                                 alt.Tooltip("total_routes:Q", title="Routes"),
+                                 alt.Tooltip("pct_accessible_stops:Q", title="% Accessible", format=".1f")],
                     )
                     st.altair_chart(bars.properties(height=480), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -1167,7 +1457,7 @@ with tab_overview:
                 st.markdown('<div class="section-title">Stop Type Breakdown — Top 15</div>', unsafe_allow_html=True)
                 if mbta:
                     df_t = pd.DataFrame(mbta[:15])
-                    df_melt = df_t[["neighborhood", "rapid_transit_stops", "commuter_rail_stops", "bus_stops"]].melt(
+                    df_melt = df_t[["neighborhood","rapid_transit_stops","commuter_rail_stops","bus_stops"]].melt(
                         id_vars="neighborhood", var_name="Stop Type", value_name="Count"
                     )
                     stacked = alt.Chart(df_melt).mark_bar().encode(
@@ -1175,16 +1465,16 @@ with tab_overview:
                                 axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
                         x=alt.X("Count:Q", axis=alt.Axis(title="Stop Count")),
                         color=alt.Color("Stop Type:N",
-                            scale=alt.Scale(
-                                domain=["rapid_transit_stops", "commuter_rail_stops", "bus_stops"],
-                                range=["#60a5fa", "#a78bfa", "#34d399"]),
-                            legend=alt.Legend(title=None, orient="bottom")),
-                        tooltip=["neighborhood:N", "Stop Type:N", "Count:Q"],
+                                        scale=alt.Scale(
+                                            domain=["rapid_transit_stops","commuter_rail_stops","bus_stops"],
+                                            range=["#60a5fa","#a78bfa","#34d399"]),
+                                        legend=alt.Legend(title=None, orient="bottom")),
+                        tooltip=["neighborhood:N","Stop Type:N","Count:Q"],
                     )
                     st.altair_chart(stacked.properties(height=480), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── GROCERY deep dive ─────────────────────────────────────────────────
+        # ── GROCERY ───────────────────────────────────────────────────────────
         elif domain_filter == "Grocery":
             scores   = domain_data.get("scores", [])
             hotspots = domain_data.get("hotspots", [])
@@ -1195,7 +1485,6 @@ with tab_overview:
                 st.warning(f"⚠️ {food_deserts} neighborhoods classified as food deserts")
 
             col1, col2 = st.columns(2, gap="medium")
-
             with col1:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">Grocery Access Scores</div>', unsafe_allow_html=True)
@@ -1210,8 +1499,8 @@ with tab_overview:
                                 axis=alt.Axis(title="Grocery Score")),
                         color=alt.Color("grocery_grade:N",
                                         scale=alt.Scale(
-                                            domain=["WELL_STOCKED", "ADEQUATE", "MODERATE", "FOOD_DESERT"],
-                                            range=["#1E8449", "#82E0AA", "#F1C40F", "#C0392B"]),
+                                            domain=["WELL_STOCKED","ADEQUATE","MODERATE","FOOD_DESERT"],
+                                            range=["#1E8449","#82E0AA","#F1C40F","#C0392B"]),
                                         legend=alt.Legend(title="Grade", orient="bottom")),
                         tooltip=["neighborhood:N",
                                  alt.Tooltip("grocery_score:Q", format=".1f"),
@@ -1243,14 +1532,13 @@ with tab_overview:
                     st.altair_chart(bars.properties(height=480), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── HEALTHCARE deep dive ──────────────────────────────────────────────
+        # ── HEALTHCARE ────────────────────────────────────────────────────────
         elif domain_filter == "Healthcare":
             scores   = domain_data.get("scores", [])
             profiles = domain_data.get("access_profiles", [])
             hotspots = domain_data.get("hotspots", [])
 
             col1, col2 = st.columns(2, gap="medium")
-
             with col1:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">Healthcare Scores</div>', unsafe_allow_html=True)
@@ -1278,8 +1566,7 @@ with tab_overview:
                 st.markdown('<div class="section-title">Access Profile Scores</div>', unsafe_allow_html=True)
                 if profiles:
                     df_p = pd.DataFrame(profiles[:15])
-                    # Melt density, diversity, core care scores for grouped bar
-                    df_melt = df_p[["neighborhood", "density_score", "diversity_score", "core_care_score"]].melt(
+                    df_melt = df_p[["neighborhood","density_score","diversity_score","core_care_score"]].melt(
                         id_vars="neighborhood", var_name="Component", value_name="Score"
                     )
                     grouped = alt.Chart(df_melt).mark_bar().encode(
@@ -1288,16 +1575,16 @@ with tab_overview:
                                 axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
                         color=alt.Color("Component:N",
                                         scale=alt.Scale(
-                                            domain=["density_score", "diversity_score", "core_care_score"],
-                                            range=["#f472b6", "#c084fc", "#60a5fa"]),
+                                            domain=["density_score","diversity_score","core_care_score"],
+                                            range=["#f472b6","#c084fc","#60a5fa"]),
                                         legend=alt.Legend(title=None, orient="bottom")),
-                        tooltip=["neighborhood:N", "Component:N",
+                        tooltip=["neighborhood:N","Component:N",
                                  alt.Tooltip("Score:Q", format=".1f")],
                     )
                     st.altair_chart(grouped.properties(height=480), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── SCHOOLS deep dive ─────────────────────────────────────────────────
+        # ── SCHOOLS ───────────────────────────────────────────────────────────
         elif domain_filter == "Schools":
             neighborhoods_data = domain_data.get("neighborhoods", [])
             summary = domain_data.get("summary", {})
@@ -1305,12 +1592,9 @@ with tab_overview:
             st.markdown(
                 f'<div class="narrative-box">'
                 f'Total schools citywide: <b>{summary.get("total_schools_citywide", "—")}</b>'
-                f'</div>',
-                unsafe_allow_html=True,
+                f'</div>', unsafe_allow_html=True,
             )
-
             col1, col2 = st.columns(2, gap="medium")
-
             with col1:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">School Scores</div>', unsafe_allow_html=True)
@@ -1337,7 +1621,7 @@ with tab_overview:
                 st.markdown('<div class="section-title">School Type Mix</div>', unsafe_allow_html=True)
                 if neighborhoods_data:
                     df_s = pd.DataFrame(neighborhoods_data[:15])
-                    df_melt = df_s[["neighborhood", "public", "private", "charter"]].melt(
+                    df_melt = df_s[["neighborhood","public","private","charter"]].melt(
                         id_vars="neighborhood", var_name="Type", value_name="Count"
                     )
                     stacked = alt.Chart(df_melt).mark_bar().encode(
@@ -1346,15 +1630,15 @@ with tab_overview:
                         x=alt.X("Count:Q", axis=alt.Axis(title="School Count")),
                         color=alt.Color("Type:N",
                                         scale=alt.Scale(
-                                            domain=["public", "private", "charter"],
-                                            range=["#a78bfa", "#60a5fa", "#34d399"]),
+                                            domain=["public","private","charter"],
+                                            range=["#a78bfa","#60a5fa","#34d399"]),
                                         legend=alt.Legend(title=None, orient="bottom")),
-                        tooltip=["neighborhood:N", "Type:N", "Count:Q"],
+                        tooltip=["neighborhood:N","Type:N","Count:Q"],
                     )
                     st.altair_chart(stacked.properties(height=480), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── RESTAURANTS deep dive ─────────────────────────────────────────────
+        # ── RESTAURANTS ───────────────────────────────────────────────────────
         elif domain_filter == "Restaurants":
             neighborhoods_data = domain_data.get("neighborhoods", [])
             summary = domain_data.get("summary", {})
@@ -1363,12 +1647,9 @@ with tab_overview:
                 f'<div class="narrative-box">'
                 f'Total restaurants citywide: <b>{summary.get("total_restaurants_citywide", "—")}</b> · '
                 f'Avg rating: <b>{summary.get("avg_rating_citywide", "—")}</b>/5'
-                f'</div>',
-                unsafe_allow_html=True,
+                f'</div>', unsafe_allow_html=True,
             )
-
             col1, col2 = st.columns(2, gap="medium")
-
             with col1:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">Restaurant Scores</div>', unsafe_allow_html=True)
@@ -1396,7 +1677,7 @@ with tab_overview:
                 st.markdown('<div class="section-title">Price Range Mix</div>', unsafe_allow_html=True)
                 if neighborhoods_data:
                     df_r = pd.DataFrame(neighborhoods_data[:15])
-                    df_melt = df_r[["neighborhood", "budget", "mid_range", "upscale"]].melt(
+                    df_melt = df_r[["neighborhood","budget","mid_range","upscale"]].melt(
                         id_vars="neighborhood", var_name="Price Range", value_name="Count"
                     )
                     stacked = alt.Chart(df_melt).mark_bar().encode(
@@ -1405,15 +1686,15 @@ with tab_overview:
                         x=alt.X("Count:Q", axis=alt.Axis(title="Restaurant Count")),
                         color=alt.Color("Price Range:N",
                                         scale=alt.Scale(
-                                            domain=["budget", "mid_range", "upscale"],
-                                            range=["#34d399", "#fb923c", "#f472b6"]),
+                                            domain=["budget","mid_range","upscale"],
+                                            range=["#34d399","#fb923c","#f472b6"]),
                                         legend=alt.Legend(title=None, orient="bottom")),
-                        tooltip=["neighborhood:N", "Price Range:N", "Count:Q"],
+                        tooltip=["neighborhood:N","Price Range:N","Count:Q"],
                     )
                     st.altair_chart(stacked.properties(height=480), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── UNIVERSITIES deep dive ────────────────────────────────────────────
+        # ── UNIVERSITIES ──────────────────────────────────────────────────────
         elif domain_filter == "Universities":
             neighborhoods_data = domain_data.get("neighborhoods", [])
             summary = domain_data.get("summary", {})
@@ -1421,16 +1702,12 @@ with tab_overview:
             st.markdown(
                 f'<div class="narrative-box">'
                 f'{summary.get("neighborhoods_with_universities", 0)} neighborhoods have universities'
-                f'</div>',
-                unsafe_allow_html=True,
+                f'</div>', unsafe_allow_html=True,
             )
-
             if neighborhoods_data:
-                df_u = pd.DataFrame(neighborhoods_data)
+                df_u    = pd.DataFrame(neighborhoods_data)
                 df_with = df_u[df_u["total_universities"].fillna(0) > 0].copy()
-
                 col1, col2 = st.columns(2, gap="medium")
-
                 with col1:
                     st.markdown('<div class="section-card">', unsafe_allow_html=True)
                     st.markdown('<div class="section-title">Education Scores</div>', unsafe_allow_html=True)
@@ -1464,12 +1741,11 @@ with tab_overview:
                                 f'({int(row["total_universities"])} unis · score: {row["education_score"]:.0f})'
                                 f'</span><br>'
                                 f'<span style="color:rgba(255,255,255,0.55);font-size:11px;">{names}</span>'
-                                f'</div>',
-                                unsafe_allow_html=True,
+                                f'</div>', unsafe_allow_html=True,
                             )
                     st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── BLUEBIKES deep dive ───────────────────────────────────────────────
+        # ── BLUEBIKES ─────────────────────────────────────────────────────────
         elif domain_filter == "Bluebikes":
             neighborhoods_data = domain_data.get("neighborhoods", [])
             summary = domain_data.get("summary", {})
@@ -1478,14 +1754,11 @@ with tab_overview:
                 f'<div class="narrative-box">'
                 f'Total stations: <b>{summary.get("total_stations_citywide", "—")}</b> · '
                 f'Total docks: <b>{summary.get("total_docks_citywide", "—")}</b>'
-                f'</div>',
-                unsafe_allow_html=True,
+                f'</div>', unsafe_allow_html=True,
             )
-
             if neighborhoods_data:
                 df_bb = pd.DataFrame(neighborhoods_data[:20])
                 col1, col2 = st.columns(2, gap="medium")
-
                 with col1:
                     st.markdown('<div class="section-card">', unsafe_allow_html=True)
                     st.markdown('<div class="section-title">BlueBikes Scores</div>', unsafe_allow_html=True)
@@ -1508,7 +1781,7 @@ with tab_overview:
                 with col2:
                     st.markdown('<div class="section-card">', unsafe_allow_html=True)
                     st.markdown('<div class="section-title">Station Size Mix</div>', unsafe_allow_html=True)
-                    df_melt = df_bb[["neighborhood", "large_stations", "medium_stations", "small_stations"]].melt(
+                    df_melt = df_bb[["neighborhood","large_stations","medium_stations","small_stations"]].melt(
                         id_vars="neighborhood", var_name="Size", value_name="Count"
                     )
                     stacked = alt.Chart(df_melt).mark_bar().encode(
@@ -1517,18 +1790,17 @@ with tab_overview:
                         x=alt.X("Count:Q", axis=alt.Axis(title="Station Count")),
                         color=alt.Color("Size:N",
                                         scale=alt.Scale(
-                                            domain=["large_stations", "medium_stations", "small_stations"],
-                                            range=["#34d399", "#60a5fa", "#a78bfa"]),
+                                            domain=["large_stations","medium_stations","small_stations"],
+                                            range=["#34d399","#60a5fa","#a78bfa"]),
                                         legend=alt.Legend(title=None, orient="bottom")),
-                        tooltip=["neighborhood:N", "Size:N", "Count:Q"],
+                        tooltip=["neighborhood:N","Size:N","Count:Q"],
                     )
                     st.altair_chart(stacked.properties(height=480), use_container_width=True)
                     st.markdown('</div>', unsafe_allow_html=True)
 
-        # ── Generic fallback for any domain without a custom view ─────────────
+        # ── Generic fallback ──────────────────────────────────────────────────
         else:
-            st.info(f"Domain deep-dive for **{domain_filter}** — data loaded. "
-                    f"Custom charts coming soon.")
+            st.info(f"Domain deep-dive for **{domain_filter}** — data loaded. Custom charts coming soon.")
             if domain_data:
                 first_key = next((k for k in domain_data if isinstance(domain_data[k], list)
                                   and domain_data[k]), None)
@@ -1536,7 +1808,276 @@ with tab_overview:
                     st.dataframe(pd.DataFrame(domain_data[first_key]),
                                  use_container_width=True, hide_index=True)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 1: No neighborhood, no domain → Home Page
+    # ══════════════════════════════════════════════════════════════════════════
+    else:
 
+        # Row 1: Map + Safety donut
+        col_map, col_safe = st.columns([1.2, 1], gap="medium")
+
+        with col_map:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="section-title">Neighborhood Safety Score — Boston & Cambridge</div>'
+                '<div class="section-subtitle">Green = safer · Red = higher concern · Hover for details</div>',
+                unsafe_allow_html=True,
+            )
+            map_data = load_map()
+            features = map_data.get("features", [])
+            if features:
+                import pydeck as pdk
+
+                for f in features:
+                    grade = f["properties"].get("safety_grade", "")
+                    f["properties"]["fill_color"] = SAFETY_COLORS.get(
+                        str(grade).strip().upper(), [160, 160, 160, 140]
+                    )
+
+                geojson = {"type": "FeatureCollection", "features": features}
+                lats = [f["properties"]["latitude"] for f in features if f["properties"].get("latitude")]
+                lngs = [f["properties"]["longitude"] for f in features if f["properties"].get("longitude")]
+
+                layer = pdk.Layer(
+                    "GeoJsonLayer", data=geojson,
+                    filled=True, stroked=True, pickable=True, auto_highlight=True,
+                    get_fill_color="properties.fill_color",
+                    get_line_color=[255, 255, 255, 60],   # softer white borders
+                    line_width_min_pixels=1,
+                    line_width_max_pixels=2,
+                )
+
+                view = pdk.ViewState(
+                    latitude=42.35,
+                    longitude=-71.08,
+                    zoom=10.2,      # zoomed out more to show all 51
+                    pitch=0,
+                    bearing=0,
+                )
+                deck = pdk.Deck(
+                    layers=[layer],
+                    initial_view_state=view,
+                    tooltip={
+                        "html": "<b style='font-size:13px'>{neighborhood}</b><br/>"
+                                "<span style='color:#52b788'>Safety: <b>{safety_score}</b>/100 · {safety_grade}</span><br/>"
+                                "Overall: <b>{master_score}</b>/100 · {master_grade}<br/>"
+                                "<span style='opacity:0.7'>↑ {top_strength} · ↓ {top_weakness}</span>",
+                        "style": {
+                            "backgroundColor": "#1e293b",
+                            "color": "#e2e8f0",
+                            "fontSize": "12px",
+                            "borderRadius": "10px",
+                            "padding": "10px 14px",
+                            "boxShadow": "0 4px 12px rgba(0,0,0,0.4)",
+                        },
+                    },
+                    map_style="mapbox://styles/mapbox/dark-v10",
+                )
+                st.pydeck_chart(deck, use_container_width=True, height=520)
+                l1, l2, l3, l4 = st.columns(4)
+                l1.markdown('<span style="color:#1E8449;">■</span> **Excellent**', unsafe_allow_html=True)
+                l2.markdown('<span style="color:#82E0AA;">■</span> **Good**',      unsafe_allow_html=True)
+                l3.markdown('<span style="color:#F1C40F;">■</span> **Moderate**',  unsafe_allow_html=True)
+                l4.markdown('<span style="color:#C0392B;">■</span> **High Concern**', unsafe_allow_html=True)
+            else:
+                st.info("Map data not available.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_safe:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="section-title">Safety Grade Distribution</div>'
+                '<div class="section-subtitle">All 50 neighborhoods · How Boston stacks up on safety</div>',
+                unsafe_allow_html=True,
+            )
+            # FIX: always load city-wide safety (no hood_filter)
+            domain_safety = load_domain("safety")
+            all_scores    = domain_safety.get("scores", [])
+            if all_scores:
+                df_all      = pd.DataFrame(all_scores)
+                grade_counts = df_all["safety_grade"].value_counts().reset_index()
+                grade_counts.columns = ["Grade", "Count"]
+                grade_order  = ["EXCELLENT", "GOOD", "MODERATE", "HIGH CONCERN"]
+                grade_colors = ["#1E8449", "#82E0AA", "#F1C40F", "#C0392B"]
+                donut = alt.Chart(grade_counts).mark_arc(
+                    innerRadius=70, outerRadius=130, stroke="#1a1a2e", strokeWidth=2,
+                ).encode(
+                    theta=alt.Theta("Count:Q", stack=True),
+                    color=alt.Color("Grade:N",
+                                    scale=alt.Scale(domain=grade_order, range=grade_colors),
+                                    legend=alt.Legend(title=None, orient="bottom",
+                                                      direction="horizontal", labelFontSize=12)),
+                    order=alt.Order("Count:Q", sort="descending"),
+                    tooltip=[alt.Tooltip("Grade:N", title="Grade"),
+                             alt.Tooltip("Count:Q", title="Neighborhoods")],
+                )
+                grade_counts["Pct"] = (
+                    grade_counts["Count"] / grade_counts["Count"].sum() * 100
+                ).round(0).astype(int).astype(str) + "%"
+                labels = alt.Chart(grade_counts).mark_text(
+                    radius=155, fontSize=14, fontWeight="bold", color="#e2e8f0",
+                ).encode(
+                    theta=alt.Theta("Count:Q", stack=True),
+                    order=alt.Order("Count:Q", sort="descending"),
+                    text=alt.Text("Pct:N"),
+                )
+                st.altair_chart(
+                    alt.layer(donut, labels).properties(height=380, width=380),
+                    use_container_width=True,
+                )
+                top3 = safest_list[:3]
+                st.markdown('<div style="margin-top:8px;">', unsafe_allow_html=True)
+                for i, n in enumerate(top3):
+                    medal = ["🥇", "🥈", "🥉"][i]
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;'
+                        f'padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);">'
+                        f'<span style="color:#e2e8f0;font-size:13px;">{medal} {n["neighborhood"]}</span>'
+                        f'</div>', unsafe_allow_html=True,
+                    )
+                st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.info("Safety data not available.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Row 2: Most affordable + Best transit
+        col_afford, col_transit = st.columns(2, gap="medium")
+
+        with col_afford:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="section-title">Most Affordable — Top 10</div>'
+                '<div class="section-subtitle">Higher score = more affordable relative to Boston market</div>',
+                unsafe_allow_html=True,
+            )
+            if affordable_list:
+                df_afford = pd.DataFrame(affordable_list)
+                bars = alt.Chart(df_afford).mark_bar(
+                    cornerRadiusTopRight=5, cornerRadiusBottomRight=5,
+                ).encode(
+                    y=alt.Y("neighborhood:N", sort=None,
+                            axis=alt.Axis(title=None, labelFontSize=11,
+                                          labelLimit=160, labelFontWeight="bold")),
+                    x=alt.X("score:Q", scale=alt.Scale(domain=[0, 100]),
+                            axis=alt.Axis(title="Affordability Score", grid=True)),
+                    color=alt.Color("score:Q",
+                                    scale=alt.Scale(domain=[60, 80], range=["#95d5b2", "#1b4332"]),
+                                    legend=None),
+                    tooltip=["neighborhood:N",
+                             alt.Tooltip("score:Q", format=".1f"), "grade:N",
+                             alt.Tooltip("avg_monthly_rent:Q", title="Avg Rent $", format=",.0f"),
+                             alt.Tooltip("price_per_sqft:Q", title="$/sqft", format=".2f")],
+                )
+                labels = alt.Chart(df_afford).mark_text(
+                    align="left", dx=4, fontSize=11, fontWeight="bold", color="#e2e8f0",
+                ).encode(
+                    y=alt.Y("neighborhood:N", sort=None),
+                    x=alt.X("score:Q"),
+                    text=alt.Text("score:Q", format=".0f"),
+                )
+                st.altair_chart(alt.layer(bars, labels).properties(height=380), use_container_width=True)
+            else:
+                st.info("Housing data not available.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_transit:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.markdown(
+                '<div class="section-title">Best Transit — Top 5</div>'
+                '<div class="section-subtitle">Rapid transit lines · Stop coverage</div>',
+                unsafe_allow_html=True,
+            )
+            if transit_list:
+                LINE_PILL_COLORS = {
+                    "red":      ("#ef4444", "#fff"), "green":    ("#22c55e", "#fff"),
+                    "orange":   ("#f97316", "#fff"), "blue":     ("#3b82f6", "#fff"),
+                    "mattapan": ("#ef4444", "#fff"), "silver":   ("#94a3b8", "#fff"),
+                }
+                def line_pills(lines_str):
+                    if not lines_str:
+                        return '<span style="color:rgba(255,255,255,0.3);font-size:11px;">Bus only</span>'
+                    pills = ""
+                    for line in lines_str.split(","):
+                        line = line.strip()
+                        color, text_color = "#64748b", "#fff"
+                        for key, (bg, fg) in LINE_PILL_COLORS.items():
+                            if key in line.lower(): color, text_color = bg, fg; break
+                        pills += (f'<span style="background:{color};color:{text_color};'
+                                  f'padding:2px 8px;border-radius:999px;font-size:10px;'
+                                  f'font-weight:700;margin-right:4px;">{line}</span>')
+                    return pills
+                transit_sorted = sorted(
+                    transit_list,
+                    key=lambda x: (x.get("score", 0) or 0, x.get("total_routes", 0) or 0),
+                    reverse=True,
+                )[:5]
+                for n in transit_sorted:
+                    lines  = n.get("rapid_transit_lines")
+                    routes = n.get("total_routes", "—")
+                    st.markdown(
+                        f'<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">'
+                        f'<div style="font-weight:600;font-size:13px;color:#e2e8f0;margin-bottom:4px;">{n["neighborhood"]}</div>'
+                        f'<div>{line_pills(lines)}</div>'
+                        f'<div style="color:rgba(255,255,255,0.3);font-size:10px;margin-top:3px;">{routes} routes</div>'
+                        f'</div>', unsafe_allow_html=True,
+                    )
+            else:
+                st.info("Transit data not available.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Row 3: Best overall livability heatmap
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-title">Best Overall Livability — Top 10</div>'
+            '<div class="section-subtitle">Weighted composite across 9 domains</div>',
+            unsafe_allow_html=True,
+        )
+        if overall_list:
+            matrix = load_domain_matrix(limit=15)
+            nbhds  = matrix.get("neighborhoods", [])
+            if nbhds:
+                domain_cols = ["Safety","Housing","Transit","Grocery","Healthcare",
+                               "Schools","Restaurants","Universities","Bluebikes"]
+                rows = []
+                for n in nbhds:
+                    for d in domain_cols:
+                        rows.append({
+                            "neighborhood": n["neighborhood"], "Domain": d,
+                            "Score": n.get(d) or 0, "master_score": n.get("master_score", 0),
+                            "strength": n.get("top_strength", ""), "weakness": n.get("top_weakness", ""),
+                        })
+                df_heat = pd.DataFrame(rows)
+                heatmap = alt.Chart(df_heat).mark_rect(stroke="#1a1a2e", strokeWidth=1).encode(
+                    x=alt.X("Domain:N", sort=domain_cols,
+                            axis=alt.Axis(title=None, labelAngle=-30,
+                                          labelFontSize=11, labelFontWeight="bold")),
+                    y=alt.Y("neighborhood:N",
+                            sort=alt.EncodingSortField("master_score", order="descending"),
+                            axis=alt.Axis(title=None, labelFontSize=11, labelFontWeight="bold")),
+                    color=alt.Color("Score:Q",
+                                    scale=alt.Scale(domain=[0, 100], range=["#1e3a5f", "#52b788"]),
+                                    legend=alt.Legend(title="Score", orient="right")),
+                    tooltip=["neighborhood:N","Domain:N",
+                             alt.Tooltip("Score:Q", format=".1f", title="Score"),
+                             alt.Tooltip("strength:N", title="Strength"),
+                             alt.Tooltip("weakness:N", title="Weakness")],
+                )
+                text = alt.Chart(df_heat).mark_text(fontSize=10, fontWeight="bold").encode(
+                    x=alt.X("Domain:N", sort=domain_cols),
+                    y=alt.Y("neighborhood:N",
+                            sort=alt.EncodingSortField("master_score", order="descending")),
+                    text=alt.Text("Score:Q", format=".0f"),
+                    color=alt.condition(
+                        alt.datum.Score > 50,
+                        alt.value("#0f172a"),
+                        alt.value("#e2e8f0"),
+                    ),
+                )
+                st.altair_chart(
+                    alt.layer(heatmap, text).properties(height=420),
+                    use_container_width=True,
+                )
+        st.markdown('</div>', unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — CHATBOT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1563,7 +2104,7 @@ with tab_chat:
         st.session_state.messages = [{
             "role": "assistant",
             "content": (
-                "👋 Hi! I'm **NeighbourWise AI** — your Boston neighborhood intelligence assistant.\n\n"
+                "👋 Hi! I'm **NeighborWise AI** — your Boston neighborhood intelligence assistant.\n\n"
                 "Ask me anything: *Which neighborhood is safest for families?*, "
                 "*Compare Back Bay and Roxbury*, or *Generate a report for Fenway*."
             ),
@@ -1622,9 +2163,22 @@ with tab_chat:
                         "\n\n✅ Switch to the **Neighborhood Report** tab to download it."
                     )
 
+                # Log token/cost data — runs for ALL query types
+                _log_query_cost(user_input, result, elapsed)
+
             render_assistant_message(new_msg, key_prefix=f"new_{len(st.session_state.messages)}")
+            # Show output guardrail warnings if any issues were detected
+            guardrails = result.get("guardrails") if result else None
+            if guardrails and isinstance(guardrails, dict):
+                issues = guardrails.get("output_issues", [])
+                pii    = guardrails.get("pii_detected", False)
+                if pii:
+                    st.caption("⚠️ PII detected and redacted from this response.")
+                if issues and not pii:
+                    st.caption(f"⚠️ Output flagged: {', '.join(issues[:2])}")
 
         st.session_state.messages.append(new_msg)
+        _render_cost_tracker()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1677,62 +2231,78 @@ with tab_report:
 
     with col_right:
         if generate:
-            # Clear any previous report
             if "last_report" in st.session_state:
                 del st.session_state["last_report"]
             if "report_poll_id" in st.session_state:
                 del st.session_state["report_poll_id"]
 
-            st.markdown(
-                f'<div class="narrative-box-blue">'
-                f'<div class="narrative-title">⏳ Generating report for {selected_report_hood}</div>'
-                f'This takes 3–5 minutes. Do not close this tab.</div>',
-                unsafe_allow_html=True,
-            )
-
-            # Kick off async generation
-            resp = api_post("/report/generate",
-                            payload={"neighborhood": selected_report_hood},
-                            timeout=15)
-            if resp and resp.get("report_id"):
-                report_id = resp["report_id"]
-                st.session_state["report_poll_id"] = report_id
-                st.session_state["report_poll_hood"] = selected_report_hood
-
-                # Poll with progress bar
+            # ── Check session cache first ──────────────────────────────────
+            cache_key = f"report_cache_{selected_report_hood.lower().replace(' ', '_')}"
+            if cache_key in st.session_state:
+                # Already generated this session — fake fast progress
+                st.markdown(
+                    f'<div class="narrative-box-blue">'
+                    f'<div class="narrative-title">⚡ Loading cached report for {selected_report_hood}</div>'
+                    f'Found from earlier this session — loading instantly.</div>',
+                    unsafe_allow_html=True,
+                )
                 progress = st.progress(0)
-                status_ph = st.empty()
-                step_idx = 0
-                max_wait = 400  # seconds
-                poll_interval = 8
-                elapsed_poll = 0
+                for pct in [30, 60, 90, 100]:
+                    time.sleep(0.3)
+                    progress.progress(pct, text="✅ Done!" if pct == 100 else "📄 Loading report...")
+                st.session_state["last_report"] = st.session_state[cache_key]
 
-                while elapsed_poll < max_wait:
-                    time.sleep(poll_interval)
-                    elapsed_poll += poll_interval
-
-                    poll = api_get(f"/report/{report_id}")
-                    status = poll.get("status", "processing")
-
-                    pct = min(int(elapsed_poll / max_wait * 90), 90)
-                    step_label = REPORT_STEPS[min(step_idx, len(REPORT_STEPS) - 1)]
-                    progress.progress(pct, text=step_label)
-                    step_idx = min(step_idx + 1, len(REPORT_STEPS) - 1)
-
-                    if status == "completed":
-                        progress.progress(100, text="✅ Done!")
-                        status_ph.empty()
-                        st.session_state["last_report"] = poll
-                        break
-                    elif status == "failed":
-                        progress.empty()
-                        st.error(f"❌ Report failed: {poll.get('message', 'Unknown error')}")
-                        break
-                else:
-                    st.warning("⏰ Report is taking longer than expected. "
-                               "Check back in a moment — it may still complete.")
             else:
-                st.error("❌ Failed to start report generation. Check that the API is running.")
+                # Fresh generation
+                st.markdown(
+                    f'<div class="narrative-box-blue">'
+                    f'<div class="narrative-title">⏳ Generating report for {selected_report_hood}</div>'
+                    f'This takes 3–5 minutes. Do not close this tab.</div>',
+                    unsafe_allow_html=True,
+                )
+
+                resp = api_post("/report/generate",
+                                payload={"neighborhood": selected_report_hood},
+                                timeout=15)
+                if resp and resp.get("report_id"):
+                    report_id = resp["report_id"]
+                    st.session_state["report_poll_id"] = report_id
+                    st.session_state["report_poll_hood"] = selected_report_hood
+
+                    progress = st.progress(0)
+                    status_ph = st.empty()
+                    step_idx = 0
+                    max_wait = 400
+                    poll_interval = 8
+                    elapsed_poll = 0
+
+                    while elapsed_poll < max_wait:
+                        time.sleep(poll_interval)
+                        elapsed_poll += poll_interval
+
+                        poll = api_get(f"/report/{report_id}")
+                        status = poll.get("status", "processing")
+
+                        pct = min(int(elapsed_poll / max_wait * 90), 90)
+                        step_label = REPORT_STEPS[min(step_idx, len(REPORT_STEPS) - 1)]
+                        progress.progress(pct, text=step_label)
+                        step_idx = min(step_idx + 1, len(REPORT_STEPS) - 1)
+
+                        if status == "completed":
+                            progress.progress(100, text="✅ Done!")
+                            status_ph.empty()
+                            st.session_state["last_report"] = poll
+                            # ── Save to session cache ──────────────────────
+                            st.session_state[cache_key] = poll
+                            break
+                        elif status == "failed":
+                            progress.empty()
+                            st.error(f"❌ Report failed: {poll.get('message', 'Unknown error')}")
+                            break
+                    else:
+                        st.warning("⏰ Report is taking longer than expected.")
+                else:
+                    st.error("❌ Failed to start report generation. Check that the API is running.")
 
         # Show download if report is ready
         if "last_report" in st.session_state:

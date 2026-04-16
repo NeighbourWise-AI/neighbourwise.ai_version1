@@ -11,7 +11,7 @@ Endpoints:
   - /health              — Health check
 
 Run:
-    uvicorn neighborwise_fastapi:app --reload --port 8001
+    python3 -m uvicorn neighbourwise_fastapi:app --reload --port 8001
 """
 
 import json
@@ -50,13 +50,8 @@ app = FastAPI(
 )
 
 # Mount overview router — all /overview/* endpoints live in overview_endpoints.py
-try:
-    from overview_endpoints import router as overview_router
-    app.include_router(overview_router)
-except ImportError:
-    logger.warning(
-        "[startup] overview_endpoints.py not found — /overview/* endpoints disabled."
-    )
+from overview_endpoints import router as overview_router
+app.include_router(overview_router)
 
 # CORS middleware
 app.add_middleware(
@@ -172,43 +167,47 @@ class GuardrailsResult(BaseModel):
 
 class QueryResponse(BaseModel):
     """Query response from router agent."""
-    type: str = Field(..., description="Intent type")
+    type: str = Field(..., description="Intent type: data_query, chart, image, web_search, report, graph_query")
     answer: str = Field(..., description="Synthesized answer")
-    neighborhood: Optional[str] = None
-    domain: Optional[str] = None
-    domains: List[str] = Field(default_factory=list)
-    confidence: float = 0.0
-    elapsed: float = 0.0
-    routing: Optional[RoutingMeta] = None
+    neighborhood: Optional[str] = Field(None, description="Primary detected neighborhood (if any)")
+    domain: Optional[str] = Field(None, description="Primary detected domain")
+    domains: List[str] = Field(default_factory=list, description="All detected domains")
+    confidence: float = Field(0.0, description="Classification confidence (0–1)")
+    elapsed: float = Field(0.0, description="Query execution time in seconds")
+    routing: Optional[RoutingMeta] = Field(None, description="Routing decision metadata")
     llm_usage: Optional[LLMUsageSummary] = None
     guardrails: Optional[GuardrailsResult] = Field(None, description="Input + output guardrail results")
-    sql: Optional[str] = None
-    results: Optional[List[Dict]] = None
-    rag_chunks: Optional[List[Dict]] = None
-    validation: Optional[Dict] = None
-    chart_path: Optional[str] = None
-    image_paths: Optional[List[str]] = None
-    error: Optional[str] = None
+    sql: Optional[str] = Field(None, description="Executed SQL (if data_query)")
+    results: Optional[List[Dict]] = Field(None, description="SQL results (if data_query)")
+    rag_chunks: Optional[List[Dict]] = Field(None, description="RAG sources (if applicable)")
+    validation: Optional[Dict] = Field(None, description="Validation feedback")
+    chart_path: Optional[str] = Field(None, description="Path to generated chart (if chart)")
+    image_paths: Optional[List[str]] = Field(None, description="Paths to generated images (if image)")
+    error: Optional[str] = Field(None, description="Error message (if failed)")
 
 
 class ReportRequest(BaseModel):
+    """Report generation request."""
     neighborhood: str = Field(..., description="Neighborhood name")
+
     class Config:
         json_schema_extra = {"example": {"neighborhood": "Dorchester"}}
 
 
 class ReportResponse(BaseModel):
-    report_id: str
+    """Report generation response."""
+    report_id: str = Field(..., description="Unique report identifier")
     neighborhood: str
-    status: str = "pending"
-    pdf_path: Optional[str] = None
-    url: Optional[str] = None
+    status: str = Field("pending", description="Status: pending, processing, completed, failed")
+    pdf_path: Optional[str] = Field(None, description="Path to generated PDF")
+    url: Optional[str] = Field(None, description="Download URL")
     created_at: str
     completed_at: Optional[str] = None
     message: str
 
 
 class HealthResponse(BaseModel):
+    """Health check response."""
     status: str
     timestamp: str
     snowflake_connected: bool
@@ -253,12 +252,14 @@ def run_query(query: str, conn):
 
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check():
+    """Check API and database health."""
     try:
         conn = get_snowflake_conn()
         conn.close()
         snowflake_ok = True
     except Exception:
         snowflake_ok = False
+
     return HealthResponse(
         status="healthy" if snowflake_ok else "degraded",
         timestamp=datetime.utcnow().isoformat(),
@@ -272,6 +273,7 @@ async def health_check():
 
 @app.get("/", tags=["Info"])
 async def root():
+    """Root endpoint — API documentation."""
     return {
         "name": "NeighbourWise AI API",
         "version": "1.0.0",
@@ -279,19 +281,19 @@ async def root():
         "redoc": "/redoc",
         "endpoints": {
             "overview": {
-                "neighborhoods":      "GET /overview/neighborhoods",
-                "kpis":               "GET /overview/kpis",
-                "map":                "GET /overview/map",
-                "crime_summary":      "GET /overview/crime-summary",
-                "domain_safety":      "GET /overview/domain/safety",
-                "domain_housing":     "GET /overview/domain/housing",
-                "domain_transit":     "GET /overview/domain/transit",
-                "domain_grocery":     "GET /overview/domain/grocery",
-                "domain_healthcare":  "GET /overview/domain/healthcare",
-                "domain_schools":     "GET /overview/domain/schools",
-                "domain_restaurants": "GET /overview/domain/restaurants",
-                "domain_universities":"GET /overview/domain/universities",
-                "domain_bluebikes":   "GET /overview/domain/bluebikes",
+                "neighborhoods":       "GET /overview/neighborhoods",
+                "kpis":                "GET /overview/kpis",
+                "map":                 "GET /overview/map",
+                "crime_summary":       "GET /overview/crime-summary",
+                "domain_safety":       "GET /overview/domain/safety",
+                "domain_housing":      "GET /overview/domain/housing",
+                "domain_transit":      "GET /overview/domain/transit",
+                "domain_grocery":      "GET /overview/domain/grocery",
+                "domain_healthcare":   "GET /overview/domain/healthcare",
+                "domain_schools":      "GET /overview/domain/schools",
+                "domain_restaurants":  "GET /overview/domain/restaurants",
+                "domain_universities": "GET /overview/domain/universities",
+                "domain_bluebikes":    "GET /overview/domain/bluebikes",
             },
             "query":         "POST /query",
             "neighborhoods": "GET /neighborhoods",
@@ -306,11 +308,12 @@ async def root():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NEIGHBORHOODS
+# NEIGHBORHOODS ENDPOINT (legacy — kept for backwards compatibility)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/neighborhoods", tags=["Neighborhoods"])
 async def list_neighborhoods():
+    """Get list of all neighborhoods (raw). Use /overview/neighborhoods for the sidebar dropdown."""
     conn = get_snowflake_conn()
     try:
         from shared.snowflake_conn import get_all_neighborhoods
@@ -329,10 +332,17 @@ async def process_query(request: QueryRequest):
     """
     Route and process a natural language query about Boston neighborhoods.
 
-    Speed tips:
-    - Set skip_validation=true to skip the LLM validation step (~30-40s savings)
-    - For simple single-domain queries, validation is auto-skipped
-    - Multi-domain / graph_query always validates (hallucination risk is higher)
+    Routing logic (handled internally by router_agent):
+    - report keywords                          → report       (report_agent)
+    - chart/visualization keywords             → chart        (graphic_agent)
+    - web-only signals (news, weather today)   → web_search   (web_search_agent)
+    - livability/comparison intent             → graph_query  (Graph_agent + Neo4j)
+    - 2+ domains detected                      → graph_query  (Graph_agent + Neo4j)
+    - 1 domain detected                        → data_query   (SQL + RAG)
+    - nothing matches                          → web_search
+
+    Pass domain_filter to force a specific domain and skip auto-detection.
+    Pass skip_validation=true to skip the LLM validation step (~30-40s savings).
     """
     logger.info(f"[/query] Received: {request.query!r}  domain_filter={request.domain_filter!r}")
     t_start = time.time()
@@ -360,7 +370,7 @@ async def process_query(request: QueryRequest):
                 error=None,
             )
     except ImportError:
-        pass  # guardrails module not present — skip
+        pass  # guardrails module not present — skip silently
 
     conn = None
     try:
@@ -369,7 +379,7 @@ async def process_query(request: QueryRequest):
 
         conn = get_conn()
 
-        # ── Cost tracker ──────────────────────────────────────────────────
+        # ── Cost tracker (graceful — works even if module missing) ────────────
         tracker = None
         try:
             from LLM_cost_tracker import CostTracker
@@ -377,11 +387,11 @@ async def process_query(request: QueryRequest):
         except ImportError:
             pass
 
-        # ── Route the query (original call — no changes to router_agent) ──
+        # ── Route the query ───────────────────────────────────────────────────
         result = route(request.query, conn, domain_filter=request.domain_filter)
         elapsed = round(time.time() - t_start, 2)
 
-        # Propagate fallback info
+        # Propagate fallback info if present
         routing_data = result.get("routing")
         fallback = result.get("routing_fallback")
         if routing_data and fallback:
@@ -390,13 +400,12 @@ async def process_query(request: QueryRequest):
             elif hasattr(routing_data, "fallback_used"):
                 routing_data.fallback_used = fallback
 
-        # ── Output Guardrails (fast — regex only, no LLM call) ────────────
+        # ── Output Guardrails (fast — regex only, no LLM call) ────────────────
         answer_text = result.get("answer", "")
         try:
             from neighbourwise_guardrails import validate_output
             output_check = validate_output(answer_text)
-            # Use the filtered (PII-redacted) output
-            answer_text = output_check["filtered_output"]
+            answer_text = output_check["filtered_output"]  # PII-redacted
             guardrails_result = GuardrailsResult(
                 input_valid=True,
                 output_safe=output_check["is_safe"],
@@ -407,18 +416,19 @@ async def process_query(request: QueryRequest):
             if not output_check["is_safe"]:
                 logger.warning(f"[/query] Output guardrail issues: {output_check['issues']}")
         except ImportError:
-            pass  # guardrails module not present — skip
+            pass  # guardrails module not present — skip silently
 
-        # ── Post-hoc LLM usage estimation ─────────────────────────────────
+        # ── Post-hoc LLM usage estimation ─────────────────────────────────────
+        # Since Cortex doesn't return token counts we estimate from text sizes
+        # and model pricing. Direct Anthropic/OpenAI calls could use actual counts.
         llm_usage = None
         if tracker:
-            intent_type = result.get("type", "data_query")
-            answer_text = result.get("answer", "")
-            query_text = request.query
-            rag_chunks = result.get("rag_chunks") or []
-            validation = result.get("validation") or {}
+            intent_type  = result.get("type", "data_query")
+            rag_chunks   = result.get("rag_chunks") or []
+            validation   = result.get("validation") or {}
+            query_text   = request.query
 
-            # Classify call (all intents)
+            # 1. Classify call (always happens)
             classify_prompt = query_text + ("x" * 600)
             classify_output = '{"intent":"' + intent_type + '"}'
             tracker.log(
@@ -429,7 +439,7 @@ async def process_query(request: QueryRequest):
                 latency_s=round(elapsed * 0.05, 2),
             )
 
-            # Generate call
+            # 2. Generate call (data_query, graph_query, web_search)
             if intent_type in ("graph_query", "web_search", "data_query") and answer_text:
                 rag_context = " ".join(
                     c.get("chunk_text", c.get("CHUNK_TEXT", ""))[:500]
@@ -437,12 +447,7 @@ async def process_query(request: QueryRequest):
                 )
                 sys_prompt_size = 2000 if intent_type != "data_query" else 1500
                 gen_input = ("x" * sys_prompt_size) + query_text + rag_context
-
-                if intent_type in ("graph_query", "web_search"):
-                    gen_model = "claude-sonnet-4-6"
-                else:
-                    gen_model = "mistral-large2"
-
+                gen_model = "claude-sonnet-4-6" if intent_type in ("graph_query", "web_search") else "mistral-large2"
                 tracker.log(
                     model=gen_model,
                     input_text=gen_input,
@@ -451,21 +456,16 @@ async def process_query(request: QueryRequest):
                     latency_s=round(elapsed * 0.55, 2),
                 )
 
-            # Validate call
+            # 3. Validate call (when validation was run)
             has_validation = (
                 validation.get("passed") is not None
                 or validation.get("checks")
                 or validation.get("needs_improvement") is not None
             )
             if has_validation and answer_text:
-                val_input = ("x" * 1500) + answer_text + query_text
+                val_input     = ("x" * 1500) + answer_text + query_text
                 val_output_raw = json.dumps(validation.get("checks", {}))
-
-                if intent_type in ("graph_query", "web_search"):
-                    val_model = "gpt-4o"
-                else:
-                    val_model = "claude-sonnet-4-6"
-
+                val_model     = "gpt-4o" if intent_type in ("graph_query", "web_search") else "claude-sonnet-4-6"
                 tracker.log(
                     model=val_model,
                     input_text=val_input,
@@ -473,7 +473,7 @@ async def process_query(request: QueryRequest):
                     purpose="validate",
                     latency_s=round(elapsed * 0.30, 2),
                 )
-
+                # 4. Improve call (when validator triggered regeneration)
                 if validation.get("regenerated"):
                     tracker.log(
                         model="claude-sonnet-4-6" if intent_type == "graph_query" else "mistral-large2",
@@ -483,24 +483,19 @@ async def process_query(request: QueryRequest):
                         latency_s=round(elapsed * 0.10, 2),
                     )
 
-            # Trajectory
-            if intent_type == "graph_query":
-                for step in ["classify", "neo4j_query", "rag_retrieve", "generate", "validate"]:
-                    tracker.record_step(step)
-            elif intent_type == "data_query":
-                for step in ["classify", "sql_execute", "rag_retrieve", "generate", "validate"]:
-                    tracker.record_step(step)
-            elif intent_type == "web_search":
-                for step in ["classify", "serper_search", "url_fetch", "generate", "validate"]:
-                    tracker.record_step(step)
-            elif intent_type == "chart":
-                for step in ["classify", "sql_execute", "chart_render"]:
-                    tracker.record_step(step)
-            elif intent_type == "report":
-                for step in ["classify", "report_generate"]:
-                    tracker.record_step(step)
+            # 5. Trajectory recording
+            trajectory_map = {
+                "graph_query": ["classify", "neo4j_query", "rag_retrieve", "generate", "validate"],
+                "data_query":  ["classify", "sql_execute", "rag_retrieve", "generate", "validate"],
+                "web_search":  ["classify", "serper_search", "url_fetch", "generate", "validate"],
+                "chart":       ["classify", "sql_execute", "chart_render"],
+                "report":      ["classify", "report_generate"],
+                "image":       ["classify", "image_generate"],
+            }
+            for step in trajectory_map.get(intent_type, ["classify"]):
+                tracker.record_step(step)
 
-            # Build summary
+            # 6. Build summary and construct Pydantic model
             usage_raw = tracker.summary()
 
             trajectory_info = None
@@ -543,12 +538,13 @@ async def process_query(request: QueryRequest):
             f"[/query] Completed in {elapsed}s  "
             f"type={result.get('type', 'data_query')!r}  "
             f"fallback={fallback!r}"
-            + (f"  llm_calls={llm_usage.num_llm_calls}  tokens={llm_usage.total_tokens}  cost=${llm_usage.total_cost_usd:.4f}" if llm_usage else "")
+            + (f"  llm_calls={llm_usage.num_llm_calls}  tokens={llm_usage.total_tokens}  "
+               f"cost=${llm_usage.total_cost_usd:.4f}" if llm_usage else "")
         )
 
         return QueryResponse(
             type=result.get("type", "data_query"),
-            answer=answer_text,  # uses PII-redacted output from guardrails
+            answer=answer_text,
             neighborhood=result.get("neighborhood"),
             domain=result.get("domain"),
             domains=result.get("domains", []),
@@ -587,6 +583,10 @@ async def process_query(request: QueryRequest):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _generate_report_background(report_id: str, neighborhood: str):
+    """
+    Background task to generate a neighborhood PDF report.
+    Calls report_agent.generate_report() which manages its own Snowflake connection.
+    """
     try:
         reports_db[report_id]["status"] = "processing"
         from report_agent import generate_report
@@ -596,42 +596,58 @@ def _generate_report_background(report_id: str, neighborhood: str):
 
         if pdf_path:
             reports_db[report_id].update({
-                "status": "completed",
-                "pdf_path": pdf_path,
-                "url": f"/report/{report_id}/download",
+                "status":       "completed",
+                "pdf_path":     pdf_path,
+                "url":          f"/report/{report_id}/download",
                 "completed_at": datetime.utcnow().isoformat(),
-                "message": f"Report ready for {neighborhood}",
+                "message":      f"Report ready for {neighborhood}",
             })
             logger.info(f"[Report {report_id}] Completed: {pdf_path}")
         else:
             reports_db[report_id].update({
-                "status": "failed",
+                "status":  "failed",
                 "message": "Report generation returned no PDF path",
             })
+
     except Exception as e:
         logger.error(f"[Report {report_id}] Generation failed: {e}", exc_info=True)
-        reports_db[report_id].update({"status": "failed", "message": str(e)})
+        reports_db[report_id].update({
+            "status":  "failed",
+            "message": str(e),
+        })
 
 
 @app.post("/report/generate", response_model=ReportResponse, tags=["Report"])
 async def generate_report_endpoint(request: ReportRequest, background_tasks: BackgroundTasks):
+    """
+    Start async neighborhood report generation.
+
+    Returns immediately with a report_id.
+    Poll GET /report/{report_id} for status.
+    Download via GET /report/{report_id}/download when status == 'completed'.
+    Typical generation time: 3–5 minutes.
+    """
     report_id = str(uuid.uuid4())[:8]
+
     reports_db[report_id] = {
-        "report_id": report_id,
+        "report_id":   report_id,
         "neighborhood": request.neighborhood.title(),
-        "status": "pending",
-        "created_at": datetime.utcnow().isoformat(),
+        "status":      "pending",
+        "created_at":  datetime.utcnow().isoformat(),
         "completed_at": None,
-        "pdf_path": None,
-        "url": None,
-        "message": f"Report generation started for {request.neighborhood}",
+        "pdf_path":    None,
+        "url":         None,
+        "message":     f"Report generation started for {request.neighborhood}",
     }
+
     background_tasks.add_task(_generate_report_background, report_id, request.neighborhood)
+
     return ReportResponse(**reports_db[report_id])
 
 
 @app.get("/report/{report_id}", response_model=ReportResponse, tags=["Report"])
 async def get_report_status(report_id: str):
+    """Get the status of a report generation task."""
     if report_id not in reports_db:
         raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
     return ReportResponse(**reports_db[report_id])
@@ -639,16 +655,17 @@ async def get_report_status(report_id: str):
 
 @app.get("/report", tags=["Report"])
 async def list_reports():
+    """List all generated reports in this session."""
     return {
         "count": len(reports_db),
         "reports": [
             {
-                "report_id": rid,
+                "report_id":    rid,
                 "neighborhood": data["neighborhood"],
-                "status": data["status"],
-                "created_at": data["created_at"],
+                "status":       data["status"],
+                "created_at":   data["created_at"],
                 "completed_at": data.get("completed_at"),
-                "url": data.get("url"),
+                "url":          data.get("url"),
             }
             for rid, data in reports_db.items()
         ]
@@ -657,17 +674,22 @@ async def list_reports():
 
 @app.get("/report/{report_id}/download", tags=["Report"])
 async def download_report(report_id: str):
+    """Download a completed neighborhood report PDF."""
     if report_id not in reports_db:
         raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+
     report_data = reports_db[report_id]
+
     if report_data["status"] != "completed":
         raise HTTPException(
             status_code=400,
-            detail=f"Report is still {report_data['status']}. Poll /report/{report_id} for status.",
+            detail=f"Report is still {report_data['status']}. Poll /report/{report_id} for status."
         )
+
     pdf_path = report_data.get("pdf_path")
     if not pdf_path or not Path(pdf_path).exists():
         raise HTTPException(status_code=404, detail="PDF file not found on disk")
+
     return FileResponse(
         path=pdf_path,
         filename=f"{report_data['neighborhood'].lower().replace(' ', '_')}_report.pdf",
@@ -681,7 +703,7 @@ async def download_report(report_id: str):
 
 if __name__ == "__main__":
     uvicorn.run(
-        "neighborwise_fastapi:app",
+        "neighbourwise_fastapi:app",
         host="0.0.0.0",
         port=8001,
         reload=True,
