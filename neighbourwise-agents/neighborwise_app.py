@@ -164,6 +164,113 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .badge-report { background: rgba(139,92,246,0.2);  color: #c4b5fd; }
 .badge-image  { background: rgba(236,72,153,0.2);  color: #f9a8d4; }
 .badge-graph  { background: rgba(251,146,60,0.2);  color: #fed7aa; }
+
+/* ── Cost Tracker ─────────────────────────────────────────────────── */
+.ct-panel {
+    background: rgba(13,15,20,0.97);
+    border: 1px solid rgba(79,255,176,0.2);
+    border-radius: 14px;
+    padding: 0;
+    margin-top: 1.4rem;
+    overflow: hidden;
+}
+.ct-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: rgba(79,255,176,0.05);
+    border-bottom: 1px solid rgba(79,255,176,0.1);
+}
+.ct-header-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #4fffb0;
+}
+.ct-session-stat {
+    margin-left: auto;
+    font-size: 10px;
+    color: rgba(255,255,255,0.3);
+    font-family: 'DM Mono', monospace;
+}
+.ct-session-stat b { color: #4fffb0; }
+.ct-summary-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.ct-summary-tile {
+    padding: 10px 14px;
+    border-right: 1px solid rgba(255,255,255,0.05);
+}
+.ct-summary-tile:last-child { border-right: none; }
+.ct-tile-label {
+    font-size: 9px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.28);
+    margin-bottom: 3px;
+    font-family: 'DM Mono', monospace;
+}
+.ct-tile-value {
+    font-size: 13px;
+    font-weight: 700;
+    color: #e2e8f0;
+    font-family: 'DM Mono', monospace;
+}
+.ct-tile-value.green  { color: #4fffb0; }
+.ct-tile-value.blue   { color: #60a5fa; }
+.ct-tile-value.yellow { color: #fbbf24; }
+.ct-tile-value.orange { color: #fb923c; }
+.ct-log-wrap {
+    max-height: 220px;
+    overflow-y: auto;
+}
+.ct-log-header {
+    display: grid;
+    grid-template-columns: 24px 1fr 112px 72px 82px 70px 58px;
+    gap: 6px;
+    padding: 6px 14px 4px;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.22);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-family: 'DM Mono', monospace;
+    position: sticky;
+    top: 0;
+    background: rgba(13,15,20,0.97);
+}
+.ct-log-row {
+    display: grid;
+    grid-template-columns: 24px 1fr 112px 72px 82px 70px 58px;
+    gap: 6px;
+    padding: 6px 14px;
+    font-size: 10.5px;
+    color: rgba(255,255,255,0.5);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    align-items: center;
+    font-family: 'DM Mono', monospace;
+}
+.ct-log-row:last-child { border-bottom: none; }
+.ct-log-row:nth-child(even) { background: rgba(255,255,255,0.012); }
+.ct-num   { color: rgba(255,255,255,0.18); text-align: right; font-size: 9px; }
+.ct-query { color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ct-model { color: #00d4ff; font-size: 9.5px; }
+.ct-tok   { color: #e2e8f0; text-align: right; }
+.ct-cost  { color: #4fffb0; text-align: right; font-weight: 700; }
+.ct-type  { color: rgba(255,255,255,0.32); font-size: 9px; }
+.ct-lat   { color: rgba(255,255,255,0.28); text-align: right; }
+.ct-empty {
+    padding: 18px 14px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.18);
+    text-align: center;
+    font-style: italic;
+    font-family: 'DM Mono', monospace;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -273,7 +380,7 @@ EXAMPLES = [
     ("🔄", "Compare Back Bay and Roxbury across all domains"),
     ("🎓", "Moving to Roxbury as a student — good idea?"),
     ("🚇", "Which neighborhoods have no subway access?"),
-    ("🌐", "Latest MBTA service delays"),
+    ("🏘️", "Is Allston safe and affordable?"),
 ]
 
 REPORT_ITEMS = [
@@ -294,6 +401,177 @@ REPORT_STEPS = [
     "🏙️  DALL-E images...",
     "📄 Assembling PDF...",
 ]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COST TRACKER HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _init_cost_tracker():
+    """Initialise session-level cost accumulator."""
+    if "ct_queries" not in st.session_state:
+        st.session_state.ct_queries = []          # list of per-query dicts
+        st.session_state.ct_session_tokens = 0
+        st.session_state.ct_session_cost = 0.0
+
+
+def _log_query_cost(query_text: str, result: dict, elapsed: float):
+    """
+    Extract llm_usage from the FastAPI QueryResponse and append a row to the
+    session cost log.  Called immediately after every successful /query call.
+    """
+    _init_cost_tracker()
+
+    usage = result.get("llm_usage") or {}
+    if not usage:
+        return  # tracker not present in this response
+
+    total_tokens = usage.get("total_tokens", 0)
+    total_cost   = usage.get("total_cost_usd", 0.0)
+    total_lat    = usage.get("total_latency_s", elapsed)
+    num_calls    = usage.get("num_llm_calls", 0)
+    calls        = usage.get("calls", [])
+    route_type   = (result.get("routing") or {}).get("intent", result.get("type", "—"))
+
+    st.session_state.ct_queries.append({
+        "n":        len(st.session_state.ct_queries) + 1,
+        "query":    query_text,
+        "tokens":   total_tokens,
+        "cost":     total_cost,
+        "latency":  total_lat,
+        "calls":    calls,
+        "num_calls":num_calls,
+        "route":    route_type,
+    })
+    st.session_state.ct_session_tokens += total_tokens
+    st.session_state.ct_session_cost   += total_cost
+
+
+def _render_cost_tracker():
+    """
+    Render the full Cost Tracker panel using st.markdown HTML.
+    Called once at the bottom of the Ask tab after every rerun.
+    """
+    _init_cost_tracker()
+    queries = st.session_state.ct_queries
+
+    total_tokens = st.session_state.ct_session_tokens
+    total_cost   = st.session_state.ct_session_cost
+    num_queries  = len(queries)
+    avg_cost     = (total_cost / num_queries) if num_queries else 0.0
+    last_lat     = queries[-1]["latency"] if queries else 0.0
+    last_route   = queries[-1]["route"]   if queries else "—"
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    header_html = (
+        f'<div class="ct-header">'
+        f'<span style="font-size:14px;">💰</span>'
+        f'<span class="ct-header-title">Session Cost Tracker</span>'
+        f'<span class="ct-session-stat">'
+        f'<b>{num_queries}</b> quer{"y" if num_queries==1 else "ies"} &nbsp;·&nbsp; '
+        f'<b>{total_tokens:,}</b> tokens &nbsp;·&nbsp; '
+        f'<b>${total_cost:.6f}</b> total'
+        f'</span>'
+        f'</div>'
+    )
+
+    # ── Summary tiles ─────────────────────────────────────────────────────────
+    tiles_html = (
+        f'<div class="ct-summary-row">'
+
+        f'<div class="ct-summary-tile">'
+        f'<div class="ct-tile-label">Session Tokens</div>'
+        f'<div class="ct-tile-value blue">{total_tokens:,}</div>'
+        f'</div>'
+
+        f'<div class="ct-summary-tile">'
+        f'<div class="ct-tile-label">Session Cost</div>'
+        f'<div class="ct-tile-value green">${total_cost:.4f}</div>'
+        f'</div>'
+
+        f'<div class="ct-summary-tile">'
+        f'<div class="ct-tile-label">Avg / Query</div>'
+        f'<div class="ct-tile-value">${avg_cost:.5f}</div>'
+        f'</div>'
+
+        f'<div class="ct-summary-tile">'
+        f'<div class="ct-tile-label">Last Latency</div>'
+        f'<div class="ct-tile-value yellow">{last_lat:.1f}s</div>'
+        f'</div>'
+
+        f'<div class="ct-summary-tile">'
+        f'<div class="ct-tile-label">Last Route</div>'
+        f'<div class="ct-tile-value orange">{last_route}</div>'
+        f'</div>'
+
+        f'</div>'
+    )
+
+    # ── Log rows ──────────────────────────────────────────────────────────────
+    if not queries:
+        log_html = '<div class="ct-empty">No queries yet — results will appear here after each search.</div>'
+    else:
+        col_headers = (
+            '<div class="ct-log-header">'
+            '<span>#</span>'
+            '<span>Query</span>'
+            '<span>Model</span>'
+            '<span style="text-align:right">Tokens</span>'
+            '<span style="text-align:right">Cost</span>'
+            '<span>Purpose</span>'
+            '<span style="text-align:right">Latency</span>'
+            '</div>'
+        )
+        rows_html = ""
+        for q in reversed(queries):   # most recent first
+            calls = q.get("calls") or []
+            if calls:
+                for i, call in enumerate(calls):
+                    tok     = (call.get("input_tokens", 0) or 0) + (call.get("output_tokens", 0) or 0)
+                    cost_c  = call.get("cost_usd", 0.0) or 0.0
+                    model   = str(call.get("model", "—")).replace("claude-sonnet-4-6","claude-4.6 ✦").replace("claude-","claude-")
+                    purpose = call.get("purpose", "—")
+                    lat_c   = call.get("latency_s", 0.0) or 0.0
+                    q_label = _esc(q["query"][:42] + "…" if len(q["query"]) > 42 else q["query"]) if i == 0 else f'↳ call {i+1}'
+                    num_label = str(q["n"]) if i == 0 else ""
+                    rows_html += (
+                        f'<div class="ct-log-row">'
+                        f'<span class="ct-num">{num_label}</span>'
+                        f'<span class="ct-query" title="{_esc(q["query"])}">{q_label}</span>'
+                        f'<span class="ct-model">{_esc(model[:14])}</span>'
+                        f'<span class="ct-tok">{tok:,}</span>'
+                        f'<span class="ct-cost">${cost_c:.6f}</span>'
+                        f'<span class="ct-type">{_esc(purpose)}</span>'
+                        f'<span class="ct-lat">{lat_c:.2f}s</span>'
+                        f'</div>'
+                    )
+            else:
+                # No per-call breakdown — show one summary row
+                rows_html += (
+                    f'<div class="ct-log-row">'
+                    f'<span class="ct-num">{q["n"]}</span>'
+                    f'<span class="ct-query" title="{_esc(q["query"])}">'
+                    f'{_esc(q["query"][:42] + "…" if len(q["query"]) > 42 else q["query"])}'
+                    f'</span>'
+                    f'<span class="ct-model">mixed</span>'
+                    f'<span class="ct-tok">{q["tokens"]:,}</span>'
+                    f'<span class="ct-cost">${q["cost"]:.6f}</span>'
+                    f'<span class="ct-type">{_esc(q["route"])}</span>'
+                    f'<span class="ct-lat">{q["latency"]:.2f}s</span>'
+                    f'</div>'
+                )
+        log_html = f'<div class="ct-log-wrap">{col_headers}{rows_html}</div>'
+
+    # ── Assemble panel ────────────────────────────────────────────────────────
+    st.markdown(
+        f'<div class="ct-panel">{header_html}{tiles_html}{log_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _esc(s: str) -> str:
+    """Minimal HTML-escape for safe injection."""
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -437,11 +715,7 @@ tab_overview, tab_chat, tab_report = st.tabs([
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — OVERVIEW
-# Three modes:
-#   Mode 3: hood_filter AND NOT domain_filter  → Neighborhood Profile
-#   Mode 2: domain_filter                      → Domain Deep Dive
-#   Mode 1: neither                            → Home Page
+# TAB 1 — OVERVIEW  (unchanged from original)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_overview:
     import altair as alt
@@ -835,7 +1109,6 @@ with tab_overview:
         neighbors      = neighbors_data.get("neighbors", [])
 
         if neighbors and nbhd_data:
-            # Build dataframe including the selected neighborhood itself
             rows = [{
                 "neighborhood": hood_filter,
                 "master_score": nbhd_data.get("master_score") or 0,
@@ -902,7 +1175,6 @@ with tab_overview:
                 use_container_width=True,
             )
 
-            # Best and worst among neighbors
             best_nb  = max(neighbors, key=lambda x: x.get("master_score") or 0)
             worst_nb = min(neighbors, key=lambda x: x.get("master_score") or 0)
             this_score = nbhd_data.get("master_score") or 0
@@ -1662,7 +1934,6 @@ with tab_overview:
                 '<div class="section-subtitle">All 50 neighborhoods · How Boston stacks up on safety</div>',
                 unsafe_allow_html=True,
             )
-            # FIX: always load city-wide safety (no hood_filter)
             domain_safety = load_domain("safety")
             all_scores    = domain_safety.get("scores", [])
             if all_scores:
@@ -1850,9 +2121,7 @@ with tab_overview:
                     use_container_width=True,
                 )
         st.markdown('</div>', unsafe_allow_html=True)
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — CHATBOT
-# ══════════════════════════════════════════════════════════════════════════════
+
 with tab_chat:
     st.markdown(
         '<p style="color:rgba(255,255,255,0.4);font-size:0.72rem;font-weight:600;'
@@ -1861,7 +2130,10 @@ with tab_chat:
         unsafe_allow_html=True,
     )
 
-    for row_ex in [EXAMPLES[:3], EXAMPLES[3:]]:
+    # ── PATCH 2: Grid now handles 7 items across 3 rows (3 + 2 + 2) ──────────
+    for row_ex in [EXAMPLES[:3], EXAMPLES[3:6], EXAMPLES[6:]]:
+        if not row_ex:
+            continue
         cols = st.columns(3)
         for col, (icon, text) in zip(cols, row_ex):
             with col:
@@ -1928,20 +2200,25 @@ with tab_chat:
                     "elapsed":     result.get("elapsed", elapsed),
                 }
 
-                # If report was triggered via chat, stash it for the report tab
                 if rtype == "report" and result.get("pdf_path"):
                     st.session_state["last_report"] = result
                     new_msg["content"] += (
                         "\n\n✅ Switch to the **Neighborhood Report** tab to download it."
                     )
 
+                # ── PATCH 3: Log token/cost data from this response ───────────
+                _log_query_cost(user_input, result, elapsed)
+
             render_assistant_message(new_msg, key_prefix=f"new_{len(st.session_state.messages)}")
 
         st.session_state.messages.append(new_msg)
 
+    # ── PATCH 4: Cost Tracker panel — always rendered at bottom of Ask tab ────
+    _render_cost_tracker()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — NEIGHBORHOOD REPORT
+# TAB 3 — NEIGHBORHOOD REPORT  (unchanged)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_report:
     col_left, col_right = st.columns([1, 1], gap="large")
@@ -1990,7 +2267,6 @@ with tab_report:
 
     with col_right:
         if generate:
-            # Clear any previous report
             if "last_report" in st.session_state:
                 del st.session_state["last_report"]
             if "report_poll_id" in st.session_state:
@@ -2003,7 +2279,6 @@ with tab_report:
                 unsafe_allow_html=True,
             )
 
-            # Kick off async generation
             resp = api_post("/report/generate",
                             payload={"neighborhood": selected_report_hood},
                             timeout=15)
@@ -2012,26 +2287,22 @@ with tab_report:
                 st.session_state["report_poll_id"] = report_id
                 st.session_state["report_poll_hood"] = selected_report_hood
 
-                # Poll with progress bar
                 progress = st.progress(0)
                 status_ph = st.empty()
                 step_idx = 0
-                max_wait = 400  # seconds
+                max_wait = 400
                 poll_interval = 8
                 elapsed_poll = 0
 
                 while elapsed_poll < max_wait:
                     time.sleep(poll_interval)
                     elapsed_poll += poll_interval
-
                     poll = api_get(f"/report/{report_id}")
                     status = poll.get("status", "processing")
-
                     pct = min(int(elapsed_poll / max_wait * 90), 90)
                     step_label = REPORT_STEPS[min(step_idx, len(REPORT_STEPS) - 1)]
                     progress.progress(pct, text=step_label)
                     step_idx = min(step_idx + 1, len(REPORT_STEPS) - 1)
-
                     if status == "completed":
                         progress.progress(100, text="✅ Done!")
                         status_ph.empty()
@@ -2042,16 +2313,13 @@ with tab_report:
                         st.error(f"❌ Report failed: {poll.get('message', 'Unknown error')}")
                         break
                 else:
-                    st.warning("⏰ Report is taking longer than expected. "
-                               "Check back in a moment — it may still complete.")
+                    st.warning("⏰ Report is taking longer than expected.")
             else:
-                st.error("❌ Failed to start report generation. Check that the API is running.")
+                st.error("❌ Failed to start report generation.")
 
-        # Show download if report is ready
         if "last_report" in st.session_state:
             report = st.session_state["last_report"]
             nbhd = report.get("neighborhood", selected_report_hood)
-
             if report.get("status") == "completed" and report.get("url"):
                 st.markdown(
                     f'<div class="narrative-box">'
@@ -2059,8 +2327,6 @@ with tab_report:
                     f'9 domains · 4 charts · 4 DALL-E images · SARIMAX forecast</div>',
                     unsafe_allow_html=True,
                 )
-
-                # Download via FastAPI endpoint
                 download_url = f"{API_BASE_URL}{report['url']}"
                 try:
                     pdf_resp = requests.get(download_url, timeout=30)
