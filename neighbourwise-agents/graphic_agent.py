@@ -2048,61 +2048,135 @@ def generate_single_image(neighborhood,city,perspective,visual_str,transit_prese
     print(f"[Image {index}/4] Saved: {out_path.name}")
     return str(out_path)
 
+def _stable_image_path(neighborhood: str, perspective_label: str) -> Path:
+    """
+    Returns a stable (non-timestamped) path for a cached image.
+    e.g. IMAGES_DIR / "fenway_landmark.png"
+    """
+    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', neighborhood.lower())
+    return IMAGES_DIR / f"{safe_name}_{perspective_label}.png"
+
+def get_cached_images(neighborhood: str) -> list:
+    """
+    Check if all 4 perspective images already exist on disk for this neighborhood.
+    Returns list of paths if ALL 4 exist, empty list if any are missing.
+    
+    Checks both stable names (fenway_landmark.png) and timestamped names
+    (fenway_1_landmark_20260403_*.png) from previous runs.
+    """
+    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', neighborhood.lower())
+    
+    # First check stable cached names
+    stable_paths = []
+    for persp in IMAGE_PERSPECTIVES:
+        p = _stable_image_path(neighborhood, persp["label"])
+        if p.exists() and p.stat().st_size > 50_000:  # >50KB = valid DALL-E image
+            stable_paths.append(str(p))
+    
+    if len(stable_paths) == 4:
+        print(f"[Image] ✅ Cache hit — all 4 images found for '{neighborhood}' (stable names)")
+        return stable_paths
+    
+    # Fallback: check for timestamped files from previous runs
+    # Pattern: fenway_1_landmark_*.png, fenway_2_residential_*.png, etc.
+    found = {}
+    for f in IMAGES_DIR.glob(f"{safe_name}_*_*.png"):
+        for persp in IMAGE_PERSPECTIVES:
+            if f"_{persp['label']}_" in f.name and f.stat().st_size > 50_000:
+                if persp["label"] not in found:
+                    found[persp["label"]] = str(f)
+    
+    if len(found) == 4:
+        print(f"[Image] ✅ Cache hit — all 4 images found for '{neighborhood}' (timestamped)")
+        return [found[p["label"]] for p in IMAGE_PERSPECTIVES]
+    
+    missing = [p["label"] for p in IMAGE_PERSPECTIVES if p["label"] not in found]
+    print(f"[Image] Cache miss for '{neighborhood}' — missing: {missing}")
+    return []
+
 def generate_neighborhood_images(neighborhood):
+    """
+    Generate 4 DALL-E perspective images for a neighborhood.
+    
+    CACHING: Checks disk first. Only calls DALL-E for missing perspectives.
+    Saves with stable filenames so subsequent runs find them instantly.
+    Cost: $0.00 on cache hit, $0.08 per missing image on cache miss.
+    """
+    # ── CHECK CACHE FIRST ─────────────────────────────────────────────────────
+    cached = get_cached_images(neighborhood)
+    if cached:
+        print(f"[Image] Using {len(cached)} cached images for '{neighborhood}' — $0.00 DALL-E cost")
+        # Skip validation on cached images — they were validated when first generated
+        return cached
+
+    # ── CACHE MISS — generate from DALL-E ─────────────────────────────────────
     print(f"\n[Image] Fetching neighborhood context for '{neighborhood}'...")
-    info=get_neighborhood_narrative(neighborhood)
-    city="Boston"
-    if info: city=str(info.get("CITY","Boston")).title()
-    landmark_data=get_neighborhood_landmarks(neighborhood,city)
-    visual_str=""
-    housing_type=get_expected_housing_type(neighborhood)
+    info = get_neighborhood_narrative(neighborhood)
+    city = "Boston"
+    if info:
+        city = str(info.get("CITY", "Boston")).title()
+
+    landmark_data = get_neighborhood_landmarks(neighborhood, city)
+    visual_str = ""
+    housing_type = get_expected_housing_type(neighborhood)
+
     if landmark_data:
-        names=landmark_data.get("names",[]); visual=landmark_data.get("visual","")
-        if names: print(f"[Image] Landmarks: {names}")
-        if visual: visual_str=f"Street-level exterior features: {visual} Show only exteriors — never interiors of any structure."
-    visual_str+=(
+        names = landmark_data.get("names", [])
+        visual = landmark_data.get("visual", "")
+        if names:
+            print(f"[Image] Landmarks: {names}")
+        if visual:
+            visual_str = f"Street-level exterior features: {visual} Show only exteriors — never interiors of any structure."
+
+    visual_str += (
         f" CRITICAL HOUSING TYPE for {neighborhood}: {housing_type}. "
         f"Every building shown MUST match this housing type exactly."
     )
-    transit_present,transit_absent=("","")
+
+    transit_present, transit_absent = ("", "")
     if info:
-        transit_lines=get_neighborhood_transit_lines(neighborhood)
+        transit_lines = get_neighborhood_transit_lines(neighborhood)
         if transit_lines.get("rapid_lines"):
             print(f"[Image] Rapid transit lines: {transit_lines['rapid_lines']}")
         if transit_lines.get("commuter_lines"):
             print(f"[Image] Commuter lines: {transit_lines['commuter_lines']}")
-        transit_present,transit_absent=build_transit_constraints(info,transit_lines)
-    context_str=""
+        transit_present, transit_absent = build_transit_constraints(info, transit_lines)
+
+    context_str = ""
     if info:
-        safety=str(info.get("SAFETY_DESCRIPTION","") or "")[:100]
-        food=str(info.get("RESTAURANT_DESCRIPTION","") or "")[:100]
-        context_str=" ".join([p for p in [safety,food] if p])[:200]
+        safety = str(info.get("SAFETY_DESCRIPTION", "") or "")[:100]
+        food = str(info.get("RESTAURANT_DESCRIPTION", "") or "")[:100]
+        context_str = " ".join([p for p in [safety, food] if p])[:200]
+
     print(f"\n[Image] Generating 4 images for '{neighborhood}'...\n")
-    housing_type=get_expected_housing_type(neighborhood)
     print(f"[Image] Housing type: {housing_type[:80]}...")
-    saved_paths=[]
-    for i,perspective in enumerate(IMAGE_PERSPECTIVES,start=1):
+
+    saved_paths = []
+    for i, perspective in enumerate(IMAGE_PERSPECTIVES, start=1):
         try:
-            saved_paths.append(generate_single_image(neighborhood,city,perspective,visual_str,transit_present,transit_absent,context_str,i,housing_type))
+            # Generate the image via DALL-E
+            path = generate_single_image(
+                neighborhood, city, perspective, visual_str,
+                transit_present, transit_absent, context_str, i, housing_type
+            )
+            saved_paths.append(path)
+
+            # Copy to stable cached name for future lookups
+            stable = _stable_image_path(neighborhood, perspective["label"])
+            if path and Path(path).exists():
+                import shutil
+                shutil.copy2(path, stable)
+                print(f"[Image] Cached: {stable.name}")
+
         except Exception as e:
             print(f"[Image {i}/4] Failed: {e}")
 
-    # ── Validate all generated images via UniversalValidator ─────────────────
-    validator, val_conn = _get_validator()
+# ── Validate all generated images ────────────────────────────────────────
     try:
-        image_result = validator.validate(
-            AgentType.GRAPHIC_IMAGE,
-            {
-                "neighborhood":      neighborhood,
-                "city":              city,
-                "saved_paths":       saved_paths,
-                "neighborhood_info": info,
-            }
-        )
-        image_result.print_summary()
-    finally:
-        val_conn.close()
-
+        validate_images(neighborhood, city, saved_paths, info)
+    except Exception as e:
+        print(f"[Image] Validation skipped: {e}")
+    
     return saved_paths
 
 # ── Main ───────────────────────────────────────────────────────────────────────

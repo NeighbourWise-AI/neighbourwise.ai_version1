@@ -257,6 +257,38 @@ def api_post(path: str, payload: dict = None, timeout: int = 30) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600)
+def load_bluebikes_stations(neighborhood: str):
+    return api_get(f"/overview/transit/bluebikes-stations/{neighborhood}")
+
+@st.cache_data(ttl=3600)
+def load_route_lines(neighborhood: str):
+    return api_get(f"/overview/transit/route-lines/{neighborhood}")
+
+@st.cache_data(ttl=3600)
+def load_stop_sequence(neighborhood: str):
+    return api_get(f"/overview/transit/stop-sequence/{neighborhood}")
+
+@st.cache_data(ttl=3600)
+def load_transit_stops(neighborhood: str):
+    return api_get(f"/overview/transit/stops/{neighborhood}")
+
+@st.cache_data(ttl=3600)
+def load_transit_routes(neighborhood: str):
+    return api_get(f"/overview/transit/routes/{neighborhood}")
+
+@st.cache_data(ttl=3600)
+def load_crime_history(neighborhood: str):
+    return api_get(f"/overview/safety/crime-history/{neighborhood}")
+
+@st.cache_data(ttl=3600)
+def load_neighborhood_boundary(neighborhood: str):
+    return api_get(f"/overview/safety/neighborhood-boundary/{neighborhood}")
+
+@st.cache_data(ttl=3600)
+def load_hotspot_map(neighborhood: str):
+    return api_get(f"/overview/safety/hotspot-map/{neighborhood}")
+
+@st.cache_data(ttl=3600)
 def load_neighborhoods():
     data = api_get("/overview/neighborhoods")
     return data.get("neighborhoods", [])
@@ -668,17 +700,7 @@ with tab_overview:
     transit_sub        = best_transit_lines if best_transit_lines else "Bus network only"
 
     total     = n_inc + n_dec + n_stable
-    safer_pct = round((n_dec + n_stable) / total * 100) if total > 0 else 0
-
-    # KPI cards always city-wide regardless of sidebar selection
-    if not hood_filter:
-        render_metric_cards([
-            ("Neighborhoods",   "51",          "Boston · Cambridge · Suburbs"),
-            ("Safest",          safest_name,   f"Grade: {safest_list[0].get('grade', '—')} · Lowest crime rate" if safest_list else "—"),
-            ("Most Affordable", afford_name,   afford_sub),
-            ("Best Transit",    best_transit_name, transit_sub[:60] if transit_sub else "Excellent coverage"),
-            ("Crime Trend",     f"{safer_pct}% holding steady", f"📉 {n_dec} improving · ➡️ {n_stable} stable · 📈 {n_inc} rising"),
-        ])
+    safer_pct = round((n_dec + n_stable) / total * 100) if total > 0 else 0        
 
     # ══════════════════════════════════════════════════════════════════════════
     # MODE 3: Neighborhood selected + ALL domains → Neighborhood Profile
@@ -1159,82 +1181,525 @@ with tab_overview:
             narrative = domain_data.get("narrative", [])
             forecasts = domain_data.get("forecasts", [])
 
-            col1, col2 = st.columns(2, gap="medium")
-            with col1:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Safety Scores</div>', unsafe_allow_html=True)
+            # ══ CITY-WIDE VIEW ═══════════════════════════════════════════════
+            if not hood_filter:
+
+                # ── City-wide KPI cards (5) ───────────────────────────────────
                 if scores:
-                    df_s = pd.DataFrame(scores[:20])
-                    bars = alt.Chart(df_s).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4,
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("safety_score:Q", scale=alt.Scale(domain=[0, 100]),
-                                axis=alt.Axis(title="Safety Score")),
-                        color=alt.Color("safety_grade:N",
-                                        scale=alt.Scale(
-                                            domain=["EXCELLENT","GOOD","MODERATE","HIGH CONCERN"],
-                                            range=["#1E8449","#82E0AA","#F1C40F","#C0392B"]),
-                                        legend=None),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("safety_score:Q", format=".1f"),
-                                 "safety_grade:N",
-                                 alt.Tooltip("yoy_change_pct:Q", title="YoY Change %", format=".1f"),
-                                 "most_common_offense:N"],
-                    )
-                    st.altair_chart(bars.properties(height=500), use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+                    df_s = pd.DataFrame(scores)
+                    safest_s   = df_s.loc[df_s["safety_score"].idxmax()]
+                    riskiest_s = df_s.loc[df_s["safety_score"].idxmin()]
+                    avg_score  = round(df_s["safety_score"].mean(), 1)
+                    n_exc      = int((df_s["safety_grade"] == "EXCELLENT").sum())
+                    n_concern  = int((df_s["safety_grade"] == "HIGH CONCERN").sum())
+                    render_metric_cards([
+                        ("Safest Neighborhood",  safest_s["neighborhood"],   f'Score: {safest_s["safety_score"]:.0f} · {safest_s["safety_grade"]}'),
+                        ("Highest Concern",       riskiest_s["neighborhood"], f'Score: {riskiest_s["safety_score"]:.0f} · {riskiest_s["safety_grade"]}'),
+                        ("City Avg Safety Score", f'{avg_score}',             "Across all neighborhoods"),
+                        ("Excellent Rated",        f'{n_exc}',                "Neighborhoods"),
+                        ("High Concern",           f'{n_concern}',            "Neighborhoods"),
+                    ])
 
-            with col2:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">DBSCAN Hotspot Clusters</div>', unsafe_allow_html=True)
-                if hotspots:
-                    df_h = pd.DataFrame(hotspots[:20])
-                    bars = alt.Chart(df_h).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#E45756",
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("hotspot_crime_share_pct:Q",
-                                axis=alt.Axis(title="% Crimes in Hotspots")),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("hotspot_clusters:Q", title="Clusters"),
-                                 alt.Tooltip("hotspot_crime_share_pct:Q", format=".1f", title="Crime Share %"),
-                                 alt.Tooltip("total_crimes:Q", title="Total Crimes")],
-                    )
-                    st.altair_chart(bars.properties(height=500), use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+                # ── Trend KPI cards (3 colored) ───────────────────────────────
+                st.markdown(
+                    f'<div style="display:flex;gap:12px;margin-bottom:1rem;">'
 
-            if forecasts:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">SARIMAX Forecasts — Next 6 Months</div>',
-                            unsafe_allow_html=True)
-                df_f = pd.DataFrame(forecasts)
-                high_hoods = {n["neighborhood"] for n in narrative if n.get("reliability") == "HIGH"}
-                if high_hoods:
-                    df_f = df_f[df_f["neighborhood"].isin(high_hoods)]
-                line = alt.Chart(df_f).mark_line(point=True).encode(
-                    x=alt.X("forecast_month:N", axis=alt.Axis(title="Month", labelAngle=-30)),
-                    y=alt.Y("forecasted_count:Q", axis=alt.Axis(title="Forecasted Crimes")),
-                    color=alt.Color("neighborhood:N", legend=alt.Legend(title="Neighborhood")),
-                    tooltip=["neighborhood:N","forecast_month:N",
-                             alt.Tooltip("forecasted_count:Q", title="Forecast"),
-                             alt.Tooltip("lower_ci:Q", title="Lower CI"),
-                             alt.Tooltip("upper_ci:Q", title="Upper CI")],
+                    f'<div class="metric-card" style="flex:1;border-color:rgba(239,68,68,0.4);">'
+                    f'<div class="metric-label" style="color:rgba(239,68,68,0.7);">📈 Rising</div>'
+                    f'<div class="metric-value" style="color:#ef4444;">{n_inc}</div>'
+                    f'<div class="metric-sub">Neighborhoods with increasing crime</div>'
+                    f'</div>'
+
+                    f'<div class="metric-card" style="flex:1;border-color:rgba(251,191,36,0.4);">'
+                    f'<div class="metric-label" style="color:rgba(251,191,36,0.7);">➡️ Stable</div>'
+                    f'<div class="metric-value" style="color:#fbbf24;">{n_stable}</div>'
+                    f'<div class="metric-sub">Neighborhoods holding steady</div>'
+                    f'</div>'
+
+                    f'<div class="metric-card" style="flex:1;border-color:rgba(34,197,94,0.4);">'
+                    f'<div class="metric-label" style="color:rgba(34,197,94,0.7);">📉 Improving</div>'
+                    f'<div class="metric-value" style="color:#22c55e;">{n_dec}</div>'
+                    f'<div class="metric-sub">Neighborhoods with decreasing crime</div>'
+                    f'</div>'
+
+                    f'</div>',
+                    unsafe_allow_html=True,
                 )
-                st.altair_chart(line.properties(height=350), use_container_width=True)
+
+                # Row 1: Safety grade donut + DBSCAN side by side
+                col1, col2 = st.columns(2, gap="medium")
+                with col1:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Safety Grade Distribution</div>', unsafe_allow_html=True)
+                    if scores:
+                        df_s = pd.DataFrame(scores).drop_duplicates("neighborhood")
+                        grade_counts = df_s.groupby("safety_grade").size().reset_index(name="count")
+                        grade_counts["legend_label"] = grade_counts.apply(
+                            lambda r: f'{r["safety_grade"]}  ({int(r["count"])})', axis=1
+                        )
+                        donut = alt.Chart(grade_counts).mark_arc(
+                            innerRadius=80, outerRadius=160,
+                            stroke="#1a1a2e", strokeWidth=2,
+                        ).encode(
+                            theta=alt.Theta("count:Q"),
+                            color=alt.Color("legend_label:N",
+                                scale=alt.Scale(
+                                    domain=grade_counts["legend_label"].tolist(),
+                                    range=["#86efac","#93c5fd","#fde68a","#fca5a5"]),
+                                legend=alt.Legend(title=None, orient="bottom",
+                                                  direction="horizontal",
+                                                  labelFontSize=12, symbolSize=120)),
+                            tooltip=["safety_grade:N",
+                                     alt.Tooltip("count:Q", title="Neighborhoods")],
+                        )
+                        st.altair_chart(donut.properties(height=480), use_container_width=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">DBSCAN Crime Hotspot Clusters</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-subtitle">Top 10 neighborhoods by highest crime cluster concentration</div>', unsafe_allow_html=True)
+                    if hotspots:
+                        df_h = pd.DataFrame(hotspots).drop_duplicates("neighborhood")
+                        df_h = df_h.nlargest(10, "hotspot_clusters")
+                        bars_h = alt.Chart(df_h).mark_bar(
+                            cornerRadiusTopRight=4, cornerRadiusBottomRight=4,
+                            color="#fca5a5", size=22,
+                        ).encode(
+                            y=alt.Y("neighborhood:N",
+                                    sort=alt.EncodingSortField("hotspot_clusters", order="descending"),
+                                    axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
+                            x=alt.X("hotspot_clusters:Q",
+                                    axis=alt.Axis(title="Crime Hotspot Clusters")),
+                            tooltip=["neighborhood:N",
+                                     alt.Tooltip("hotspot_clusters:Q", title="Clusters"),
+                                     alt.Tooltip("hotspot_crime_share_pct:Q", format=".1f", title="Crime Share %"),
+                                     alt.Tooltip("total_crimes:Q", title="Total Crimes")],
+                        )
+                        text_h = alt.Chart(df_h).mark_text(
+                            align="left", dx=4, fontSize=15,
+                            fontWeight="bold", color="#e2e8f0",
+                        ).encode(
+                            y=alt.Y("neighborhood:N",
+                                    sort=alt.EncodingSortField("hotspot_clusters", order="descending")),
+                            x=alt.X("hotspot_clusters:Q"),
+                            text=alt.Text("hotspot_clusters:Q"),
+                        )
+                        st.altair_chart(
+                            alt.layer(bars_h, text_h).properties(height=430),
+                            use_container_width=True,
+                        )
+                    else:
+                        st.info("No hotspot data available.")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # Row 2: Monthly crime trend line
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Monthly Crime Trend — Last 12 Months</div>', unsafe_allow_html=True)
+                st.markdown('<div class="section-subtitle">Boston · Cambridge · Greater Boston</div>', unsafe_allow_html=True)
+                crime_summary_data = load_crime_summary()
+                monthly = crime_summary_data.get("monthly_by_city", [])
+                if monthly:
+                    df_m = pd.DataFrame(monthly)
+                    df_m["month"] = pd.to_datetime(df_m["month"])
+                    df_total = df_m.groupby("month")["crime_count"].sum().reset_index()
+                    max_row = df_total.loc[df_total["crime_count"].idxmax()]
+                    min_row = df_total.loc[df_total["crime_count"].idxmin()]
+                    df_labels = pd.DataFrame([
+                        {"month": max_row["month"], "crime_count": max_row["crime_count"], "label": f'{int(max_row["crime_count"]):,}'},
+                        {"month": min_row["month"], "crime_count": min_row["crime_count"], "label": f'{int(min_row["crime_count"]):,}'},
+                    ])
+                    line = alt.Chart(df_total).mark_line(
+                        color="#93c5fd", strokeWidth=2,
+                        point={"filled": True, "size": 50, "color": "#93c5fd"},
+                    ).encode(
+                        x=alt.X("month:T", axis=alt.Axis(title="Month", labelAngle=0, format="%b %Y")),
+                        y=alt.Y("crime_count:Q", axis=alt.Axis(title="Total Crimes", tickCount=8)),
+                        tooltip=[
+                            alt.Tooltip("month:T", title="Month", format="%b %Y"),
+                            alt.Tooltip("crime_count:Q", title="Crimes", format=","),
+                        ],
+                    )
+                    area = alt.Chart(df_total).mark_area(
+                        color="#93c5fd", opacity=0.1,
+                    ).encode(
+                        x=alt.X("month:T"),
+                        y=alt.Y("crime_count:Q"),
+                    )
+                    labels = alt.Chart(df_labels).mark_text(
+                        fontSize=11, fontWeight="bold", dy=-12, color="#93c5fd",
+                    ).encode(
+                        x=alt.X("month:T"),
+                        y=alt.Y("crime_count:Q"),
+                        text=alt.Text("label:N"),
+                    )
+                    st.altair_chart(
+                        alt.layer(area, line, labels).properties(height=420),
+                        use_container_width=True,
+                    )
+                else:
+                    st.info("Monthly crime trend data not available.")
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            if narrative:
-                with st.expander("📋 Full Safety Narrative Table", expanded=False):
-                    df_n = pd.DataFrame(narrative)[
-                        ["neighborhood","recent_trend","recent_avg_monthly",
-                         "forecasted_count","hotspot_clusters","reliability"]
-                    ]
-                    df_n.columns = ["Neighborhood","Trend","Avg Monthly",
-                                    "Forecast","Hotspot Clusters","Reliability"]
-                    st.dataframe(df_n, use_container_width=True, hide_index=True)
+                # Row 3: Full narrative table
+                if narrative:
+                    with st.expander("📋 Full Safety Narrative Table", expanded=False):
+                        df_n = pd.DataFrame(narrative)
+                        show_cols = [c for c in ["neighborhood","recent_trend","recent_avg_monthly",
+                                                  "forecasted_count","hotspot_clusters","reliability"]
+                                     if c in df_n.columns]
+                        if show_cols:
+                            df_n = df_n[show_cols].copy()
+                            df_n.columns = ["Neighborhood","Trend","Avg Monthly",
+                                            "Forecast","Hotspot Clusters","Reliability"][:len(show_cols)]
+                            st.dataframe(df_n, use_container_width=True, hide_index=True)
+
+            # ══ SINGLE NEIGHBORHOOD — SARIMAX + DBSCAN ═══════════════════════
+            else:
+                nbhd_score = scores[0]    if scores    else {}
+                nbhd_nar   = narrative[0] if narrative else {}
+                nbhd_hs    = hotspots[0]  if hotspots  else {}
+                df_fc      = pd.DataFrame(forecasts) if forecasts else pd.DataFrame()
+
+                # ── Derived values ─────────────────────────────────────────────
+                trend       = nbhd_nar.get("recent_trend", "—")
+                trend_emoji = {"increasing":"📈","decreasing":"📉","stable":"➡️"}.get(trend, "")
+                mape        = nbhd_nar.get("train_mape")
+                mape_str    = f"{mape:.1f}%" if mape else "N/A"
+                yoy         = nbhd_score.get("yoy_change_pct", 0) or 0
+                yoy_color   = "#22c55e" if yoy < 0 else "#ef4444"
+                yoy_arrow   = "↓" if yoy < 0 else "↑"
+                incidents_12m = nbhd_score.get("incidents_last_12m")
+                violent_crime = nbhd_score.get("most_common_violent_offense") or nbhd_score.get("most_common_offense") or "—"
+                hs_pct      = float(nbhd_hs.get("hotspot_crime_share_pct") or 0)
+                next_forecast = df_fc.iloc[0]["forecasted_count"] if not df_fc.empty else None
+
+                # Compute safety rank from all scores
+                all_safety_data = load_domain("safety")
+                all_safety_scores = all_safety_data.get("scores", [])
+                if all_safety_scores:
+                    df_all_s = pd.DataFrame(all_safety_scores).drop_duplicates("neighborhood")
+                    df_all_s = df_all_s.sort_values("safety_score", ascending=False).reset_index(drop=True)
+                    rank_row = df_all_s[df_all_s["neighborhood"].str.upper() == hood_filter.upper()]
+                    safety_rank = int(rank_row.index[0]) + 1 if not rank_row.empty else "—"
+                    total_nbhds = len(df_all_s)
+                else:
+                    safety_rank, total_nbhds = "—", "—"
+
+                # ── Row 1: 4 KPI cards ─────────────────────────────────────────
+                render_metric_cards([
+                    ("Safety Score",
+                     f'{nbhd_score.get("safety_score","—")}',
+                     nbhd_score.get("safety_grade","—")),
+
+                    ("Safety Rank",
+                     f'#{safety_rank}',
+                     f'of {total_nbhds} neighborhoods'),
+
+                    (f'YoY Change',
+                     f'<span style="color:{yoy_color}">{yoy_arrow} {abs(yoy):.1f}%</span>',
+                     "Crime vs prior year"),
+
+                    ("Total Incidents",
+                     f'{incidents_12m:,}' if incidents_12m else "—",
+                     "Last 12 months"),
+                ])
+
+                # ── Row 2: 3 KPI cards ─────────────────────────────────────────
+                cols3 = st.columns(3)
+                cards3 = [
+                    ("Top Reported Incident",
+                     violent_crime,
+                     "Most commonly reported incident"),
+
+                    ("Forecast — Next Month",
+                     f'{int(next_forecast):,}' if next_forecast else "—",
+                     "SARIMAX predicted crimes"),
+
+                    ("Hotspot Crime Share",
+                     f'{hs_pct:.1f}%',
+                     f'{nbhd_hs.get("hotspot_clusters","—")} DBSCAN clusters'),
+                ]
+                for col, (label, value, sub) in zip(cols3, cards3):
+                    col.markdown(
+                        f'<div class="metric-card">'
+                        f'<div class="metric-label">{label}</div>'
+                        f'<div class="metric-value">{value}</div>'
+                        f'<div class="metric-sub">{sub}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # ── AI narrative box ───────────────────────────────────────────
+                if nbhd_nar.get("safety_narrative"):
+                    st.markdown(
+                        f'<div class="narrative-box-blue">'
+                        f'<div class="narrative-title">{hood_filter} — AI Safety Summary</div>'
+                        f'{nbhd_nar["safety_narrative"]}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # ── Historical + SARIMAX forecast chart ───────────────────────
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="section-title">Historical Crime + 6-Month Forecast — {hood_filter}</div>'
+                    f'<div class="section-subtitle">Blue = historical monthly crimes · Orange = SARIMAX forecast · Shaded band = 95% CI · MAPE: {mape_str}</div>',
+                    unsafe_allow_html=True,
+                )
+
+                with st.spinner("Loading historical data..."):
+                    history_data = load_crime_history(hood_filter)
+
+                history = history_data.get("history", [])
+
+                if history or not df_fc.empty:
+                    # Build historical dataframe
+                    if history:
+                        df_hist = pd.DataFrame(history)
+                        df_hist.columns = [c.lower() for c in df_hist.columns]
+                        df_hist["year_month"] = pd.to_datetime(df_hist["year_month"])
+                        df_hist["type"] = "Historical"
+                        df_hist = df_hist.rename(columns={"crime_count": "count"})
+                    else:
+                        df_hist = pd.DataFrame(columns=["year_month", "count", "type"])
+
+                    # Build forecast dataframe
+                    if not df_fc.empty:
+                        df_fc_plot = df_fc.copy()
+                        df_fc_plot["year_month"] = pd.to_datetime(df_fc_plot["forecast_month"])
+                        df_fc_plot["count"] = df_fc_plot["forecasted_count"]
+                        df_fc_plot["type"] = "Forecast"
+                    else:
+                        df_fc_plot = pd.DataFrame(columns=["year_month", "count", "type"])
+
+                    # Combined for line chart
+                    df_comb = pd.concat([
+                        df_hist[["year_month", "count", "type"]],
+                        df_fc_plot[["year_month", "count", "type"]],
+                    ])
+
+                    # Main line chart
+                    line = alt.Chart(df_comb).mark_line(point=True).encode(
+                        x=alt.X("year_month:T", title="Month",
+                                axis=alt.Axis(format="%b %Y", labelAngle=-30)),
+                        y=alt.Y("count:Q", title="Crime Count"),
+                        color=alt.Color(
+                            "type:N",
+                            scale=alt.Scale(
+                                domain=["Historical", "Forecast"],
+                                range=["#4C78A8", "#F58518"],
+                            ),
+                            legend=alt.Legend(title="", orient="top-left",
+                                             labelColor="#e2e8f0", titleColor="#e2e8f0"),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("year_month:T", title="Month", format="%b %Y"),
+                            alt.Tooltip("count:Q",      title="Crimes"),
+                            alt.Tooltip("type:N",       title="Type"),
+                        ],
+                    )
+
+                    # CI band on forecast only
+                    if not df_fc_plot.empty and "lower_ci" in df_fc_plot.columns and "upper_ci" in df_fc_plot.columns:
+                        ci_band = alt.Chart(df_fc_plot).mark_area(
+                            opacity=0.2, color="#F58518",
+                        ).encode(
+                            x=alt.X("year_month:T"),
+                            y=alt.Y("lower_ci:Q", title=""),
+                            y2=alt.Y2("upper_ci:Q"),
+                        )
+                        chart = (ci_band + line).properties(height=350)
+                    else:
+                        chart = line.properties(height=350)
+
+                    st.altair_chart(chart, use_container_width=True)
+                    st.caption(
+                        f"Model accuracy (MAPE): {mape_str} · "
+                        f"{len(history)} months of historical data · "
+                        f"{len(df_fc)} months forecasted"
+                    )
+                else:
+                    st.info("No historical or forecast data available.")
+
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                # ── Crime breakdown + DBSCAN side by side ──────────────────────
+                col1, col2 = st.columns(2, gap="medium")
+
+                with col1:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="section-title">Crime Incidents — {hood_filter}</div>'
+                        f'<div class="section-subtitle">Each point is a crime incident · last 12 months · '
+                        f'red = hotspot · grey = dispersed</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    with st.spinner("Loading crime map..."):
+                        hotspot_data  = load_hotspot_map(hood_filter)
+                        boundary_data = load_neighborhood_boundary(hood_filter)
+
+                    points      = hotspot_data.get("points", [])
+                    coordinates = boundary_data.get("coordinates", [])
+
+                    if points:
+                        df_pts = pd.DataFrame(points)
+                        df_pts.columns = [c.lower() for c in df_pts.columns]
+                        df_pts["point_type"] = df_pts["is_noise"].map(
+                            {True: "Dispersed", False: "Hotspot"}
+                        )
+
+                        scatter = alt.Chart(df_pts).mark_circle(opacity=0.55).encode(
+                            longitude="lng:Q",
+                            latitude="lat:Q",
+                            color=alt.Color(
+                                "point_type:N",
+                                scale=alt.Scale(
+                                    domain=["Hotspot", "Dispersed"],
+                                    range=["#E45756", "#AAAAAA"],
+                                ),
+                                legend=alt.Legend(
+                                    title="Type", orient="top-left",
+                                    labelColor="#e2e8f0", titleColor="#e2e8f0",
+                                    labelFontSize=11,
+                                ),
+                            ),
+                            size=alt.condition(
+                                alt.datum.point_type == "Dispersed",
+                                alt.value(10), alt.value(20),
+                            ),
+                            tooltip=[
+                                alt.Tooltip("point_type:N",  title="Zone"),
+                                alt.Tooltip("description:N", title="Offense"),
+                                alt.Tooltip("date:N",        title="Date"),
+                                alt.Tooltip("cluster_id:Q",  title="Cluster #"),
+                            ],
+                        )
+
+                        if coordinates:
+                            df_bnd = pd.DataFrame(coordinates)
+                            df_bnd = pd.concat([df_bnd, df_bnd.iloc[[0]]], ignore_index=True)
+                            df_bnd["order"] = range(len(df_bnd))
+                            boundary = alt.Chart(df_bnd).mark_line(
+                                color="#FFFFFF", strokeWidth=2, opacity=0.7,
+                            ).encode(
+                                longitude="lng:Q",
+                                latitude="lat:Q",
+                                order="order:O",
+                            )
+                            chart = (boundary + scatter).properties(height=420)
+                        else:
+                            chart = scatter.properties(height=420)
+
+                        st.altair_chart(chart, use_container_width=True)
+
+                        hotspot_count = hotspot_data.get("hotspot_count", 0)
+                        noise_count   = hotspot_data.get("noise_count", 0)
+                        total_pts     = hotspot_data.get("total_points", 0)
+                        cluster_count = hotspot_data.get("cluster_count", 0)
+                        disp_pct      = max(0.0, 100.0 - hs_pct)
+
+                        st.caption(
+                            f"**{hotspot_count:,}** hotspot ({hs_pct:.1f}%) across "
+                            f"**{cluster_count}** clusters | "
+                            f"**{noise_count:,}** dispersed"
+                        )
+                    else:
+                        st.info("No hotspot data available for this neighborhood.")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="section-title">Neighborhood Safety Score — Boston & Cambridge</div>'
+                        '<div class="section-subtitle">Green = safer · Red = higher concern · Selected neighborhood highlighted</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    map_data = load_map()
+                    features = map_data.get("features", [])
+
+                    if features:
+                        import pydeck as pdk
+
+                        for f in features:
+                            grade = f["properties"].get("safety_grade", "")
+                            nbhd_name = f["properties"].get("neighborhood", "")
+                            is_selected = nbhd_name.upper() == hood_filter.upper()
+
+                            base_color = SAFETY_COLORS.get(
+                                str(grade).strip().upper(), [160, 160, 160, 140]
+                            )
+                            if is_selected:
+                                f["properties"]["fill_color"] = base_color
+                                f["properties"]["line_color"] = [0, 149, 255, 255]
+                                f["properties"]["line_width"] = 50
+                            else:
+                                f["properties"]["fill_color"] = base_color
+                                f["properties"]["line_color"] = [255, 255, 255, 120]
+                                f["properties"]["line_width"] = 1
+
+                        geojson = {"type": "FeatureCollection", "features": features}
+
+                        layer = pdk.Layer(
+                            "GeoJsonLayer",
+                            data=geojson,
+                            filled=True,
+                            stroked=True,
+                            pickable=True,
+                            auto_highlight=True,
+                            get_fill_color="properties.fill_color",
+                            get_line_color="properties.line_color",
+                            get_line_width="properties.line_width",
+                            line_width_min_pixels=1,
+                            line_width_max_pixels=4,
+                        )
+
+                        # Center on selected neighborhood
+                        sel_feature = next(
+                            (f for f in features
+                             if f["properties"].get("neighborhood","").upper() == hood_filter.upper()),
+                            None
+                        )
+                        center_lat = sel_feature["properties"]["latitude"] if sel_feature else 42.35
+                        center_lng = sel_feature["properties"]["longitude"] if sel_feature else -71.08
+
+                        view = pdk.ViewState(
+                            latitude=center_lat,
+                            longitude=center_lng,
+                            zoom=11.5,
+                            pitch=0,
+                        )
+
+                        deck = pdk.Deck(
+                            layers=[layer],
+                            initial_view_state=view,
+                            tooltip={
+                                "html": "<b>{neighborhood}</b><br/>"
+                                        "Safety: <b>{safety_score}</b>/100 · {safety_grade}<br/>"
+                                        "Overall: <b>{master_score}</b>/100",
+                                "style": {
+                                    "backgroundColor": "#1e293b",
+                                    "color": "#e2e8f0",
+                                    "fontSize": "12px",
+                                    "borderRadius": "8px",
+                                    "padding": "8px",
+                                },
+                            },
+                            map_style="mapbox://styles/mapbox/dark-v10",
+                        )
+                        st.pydeck_chart(deck, use_container_width=True, height=420)
+
+                        # Legend
+                        l1, l2, l3, l4 = st.columns(4)
+                        l1.markdown('<span style="color:#1E8449;">■</span> **Excellent**', unsafe_allow_html=True)
+                        l2.markdown('<span style="color:#82E0AA;">■</span> **Good**',      unsafe_allow_html=True)
+                        l3.markdown('<span style="color:#F1C40F;">■</span> **Moderate**',  unsafe_allow_html=True)
+                        l4.markdown('<span style="color:#C0392B;">■</span> **High Concern**', unsafe_allow_html=True)
+
+                    else:
+                        st.info("Map data not available.")
+                    st.markdown('</div>', unsafe_allow_html=True)
 
         # ── HOUSING ───────────────────────────────────────────────────────────
         elif domain_filter == "Housing":
@@ -1305,174 +1770,621 @@ with tab_overview:
 
         # ── TRANSIT ───────────────────────────────────────────────────────────
         elif domain_filter == "Transit":
-            mbta     = domain_data.get("mbta", [])
-            bikes    = domain_data.get("bluebikes", [])
-            summary  = domain_data.get("summary", {})
-            map_data = load_map()
-            features = map_data.get("features", [])
+            mbta    = domain_data.get("mbta", [])
+            summary = domain_data.get("summary", {})
 
-            st.markdown(
-                f'<div class="narrative-box">'
-                f'{summary.get("neighborhoods_with_rapid_transit", 0)} neighborhoods have rapid transit · '
-                f'{summary.get("neighborhoods_with_commuter_rail", 0)} have commuter rail · '
-                f'Avg MBTA score: {summary.get("avg_transit_score", "—")} · '
-                f'Avg BlueBikes score: {summary.get("avg_bikeshare_score", "—")}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            # ── KPI cards ─────────────────────────────────────────────────────
+            if mbta:
+                df_t = pd.DataFrame(mbta)
 
-            if mbta and features:
-                import pydeck as pdk
-                TRANSIT_FILL = {
-                    "EXCELLENT": [29,  78,  216, 200],
-                    "GOOD":      [96,  165, 250, 180],
-                    "MODERATE":  [186, 230, 253, 160],
-                    "LIMITED":   [71,  85,  105, 140],
-                }
-                centroid_lookup = {
-                    f["properties"]["neighborhood"].upper(): {
-                        "lat": f["properties"]["latitude"],
-                        "lng": f["properties"]["longitude"],
-                    }
-                    for f in features if f["properties"].get("latitude")
-                }
-                transit_features = []
-                for f in features:
-                    nbhd = f["properties"]["neighborhood"].upper()
-                    mbta_row = next((r for r in mbta if r["neighborhood"].upper() == nbhd), None)
-                    if not mbta_row: continue
-                    grade = str(mbta_row.get("transit_grade", "MODERATE")).upper()
-                    lines = mbta_row.get("rapid_transit_lines") or "Bus only"
-                    transit_features.append({
-                        "type": "Feature", "geometry": f["geometry"],
-                        "properties": {
-                            "neighborhood":  f["properties"]["neighborhood"],
-                            "transit_score": mbta_row.get("transit_score", 0),
-                            "transit_grade": grade, "lines": lines,
-                            "total_stops":   mbta_row.get("total_stops", 0),
-                            "rapid_stops":   mbta_row.get("rapid_transit_stops", 0),
-                            "total_routes":  mbta_row.get("total_routes", 0),
-                            "accessible_pct":mbta_row.get("pct_accessible_stops", 0),
-                            "fill_color":    TRANSIT_FILL.get(grade, [100, 100, 100, 140]),
+                if not hood_filter:
+                    # City-wide KPIs
+                    n_rapid     = int(df_t["has_rapid_transit"].sum())
+                    avg_score   = round(df_t["transit_score"].mean(), 1)
+                    total_stops = int(df_t["total_stops"].sum())
+                    avg_access  = round(df_t["pct_accessible_stops"].mean(), 1)
+                    top_row     = df_t.loc[df_t["transit_score"].idxmax()]
+
+                    render_metric_cards([
+                        ("With Rapid Transit",       f'{n_rapid}',
+                                                     f'of {len(df_t)} neighborhoods'),
+                        ("Avg Transit Score",         f'{avg_score}',
+                                                     "Across all neighborhoods"),
+                        ("Total Stops Citywide",      f'{total_stops:,}',
+                                                     "Bus + Rapid + Rail + Ferry"),
+                        ("Avg Accessibility",          f'{avg_access}%',
+                                                     "Wheelchair accessible stops"),
+                        ("Top Transit Neighborhood",   "Downtown",
+                                                     f'Score: {top_row["transit_score"]:.0f} · {top_row["transit_grade"]}'),
+                    ])
+
+                else:
+                    # Single neighborhood KPIs
+                    nbhd_t = df_t.iloc[0] if not df_t.empty else {}
+
+                    # Safety rank equivalent — transit rank
+                    all_transit = load_domain("transit")
+                    all_mbta    = all_transit.get("mbta", [])
+                    if all_mbta:
+                        df_all_t = pd.DataFrame(all_mbta).sort_values(
+                            "transit_score", ascending=False
+                        ).reset_index(drop=True)
+                        rank_row = df_all_t[
+                            df_all_t["neighborhood"].str.upper() == hood_filter.upper()
+                        ]
+                        transit_rank = int(rank_row.index[0]) + 1 if not rank_row.empty else "—"
+                        total_nbhds  = len(df_all_t)
+                    else:
+                        transit_rank, total_nbhds = "—", "—"
+
+                    has_rapid = nbhd_t.get("has_rapid_transit", False)
+                    lines     = nbhd_t.get("rapid_transit_lines") or "Bus only"
+
+                    render_metric_cards([
+                        ("Transit Score",
+                         f'{nbhd_t.get("transit_score","—")}',
+                         nbhd_t.get("transit_grade","—")),
+
+                        ("Transit Rank",
+                         f'#{transit_rank}',
+                         f'of {total_nbhds} neighborhoods'),
+
+                        ("Rapid Transit",
+                         "✅ Yes" if has_rapid else "🚌 Bus Only",
+                         lines[:50] if has_rapid else "No rapid transit stops"),
+
+                        ("Total Stops",
+                         f'{nbhd_t.get("total_stops","—")}',
+                         f'{nbhd_t.get("rapid_transit_stops","—")} rapid · '
+                         f'{nbhd_t.get("bus_stops","—")} bus'),
+
+                        ("% Accessible",
+                         f'{nbhd_t.get("pct_accessible_stops","—")}%',
+                         "Wheelchair accessible stops"),
+                    ])
+
+            # ══ CITY-WIDE VIEW ════════════════════════════════════════════════
+            if not hood_filter:
+
+                # Row 1: Choropleth map + score bar chart
+                col1, col2 = st.columns(2, gap="medium")
+
+                with col1:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="section-title">Transit Score Map</div>'
+                        '<div class="section-subtitle">Green = excellent · Red = limited · Hover for details</div>',
+                        unsafe_allow_html=True,
+                    )
+                    map_data = load_map()
+                    features = map_data.get("features", [])
+                    if features and mbta:
+                        import pydeck as pdk
+                        TRANSIT_FILL = {
+                            "EXCELLENT": [30,  132, 73,  200],
+                            "GOOD":      [130, 224, 170, 180],
+                            "MODERATE":  [241, 196, 15,  180],
+                            "LIMITED":   [192, 57,  43,  200],
                         }
-                    })
-                LINE_COLORS = {
-                    "Red Line":   [239, 68,  68,  230], "Green":      [34,  197, 94,  230],
-                    "Blue Line":  [59,  130, 246, 230], "Orange Line":[249, 115, 22,  230],
-                    "Mattapan":   [239, 68,  68,  200], "Silver":     [148, 163, 184, 200],
-                }
-                scatter_data = []
-                for r in mbta:
-                    coords = centroid_lookup.get(r["neighborhood"].upper())
-                    if not coords: continue
-                    lines = r.get("rapid_transit_lines") or ""
-                    circle_color = [148, 163, 184, 200]
-                    for line_key, color in LINE_COLORS.items():
-                        if line_key.lower() in lines.lower(): circle_color = color; break
-                    scatter_data.append({
-                        "name": r["neighborhood"], "lat": coords["lat"], "lng": coords["lng"],
-                        "transit_score": r.get("transit_score", 0) or 0,
-                        "transit_grade": r.get("transit_grade", ""),
-                        "lines": lines if lines else "Bus only",
-                        "total_stops": r.get("total_stops", 0) or 0,
-                        "rapid_stops": r.get("rapid_transit_stops", 0) or 0,
-                        "total_routes": r.get("total_routes", 0) or 0,
-                        "accessible_pct": r.get("pct_accessible_stops", 0) or 0,
-                        "color": circle_color,
-                        "radius": max(200, min(600, (r.get("rapid_transit_stops", 0) or 0) * 80 + 200)),
-                    })
-                geojson_layer = pdk.Layer(
-                    "GeoJsonLayer",
-                    data={"type": "FeatureCollection", "features": transit_features},
-                    filled=True, stroked=True, pickable=True, auto_highlight=True,
-                    get_fill_color="properties.fill_color",
-                    get_line_color=[255, 255, 255, 60], line_width_min_pixels=1,
-                )
-                scatter_layer = pdk.Layer(
-                    "ScatterplotLayer", data=pd.DataFrame(scatter_data),
-                    get_position=["lng", "lat"], get_fill_color="color",
-                    get_radius="radius", pickable=True, auto_highlight=True, opacity=0.9,
-                )
-                lats = [d["lat"] for d in scatter_data]
-                lngs = [d["lng"] for d in scatter_data]
-                view = pdk.ViewState(
-                    latitude=sum(lats)/len(lats) if lats else 42.36,
-                    longitude=sum(lngs)/len(lngs) if lngs else -71.06,
-                    zoom=10.5, pitch=0,
-                )
-                deck = pdk.Deck(
-                    layers=[geojson_layer, scatter_layer], initial_view_state=view,
-                    tooltip={
-                        "html": "<b>{name}</b><br/>Score: <b>{transit_score}</b>/100 · <b>{transit_grade}</b><br/>"
-                                "Lines: <b>{lines}</b><br/>Stops: {total_stops} total · {rapid_stops} rapid<br/>"
-                                "Routes: {total_routes} · Accessible: {accessible_pct}%",
-                        "style": {"backgroundColor":"#1e293b","color":"#e2e8f0",
-                                  "fontSize":"12px","borderRadius":"8px","padding":"8px"},
-                    },
-                    map_style="mapbox://styles/mapbox/dark-v10",
-                )
-                st.pydeck_chart(deck, use_container_width=True, height=540)
+                        mbta_lookup = {
+                            r["neighborhood"].upper(): r for r in mbta
+                        }
+                        transit_features = []
+                        for f in features:
+                            nbhd = f["properties"]["neighborhood"].upper()
+                            mbta_row = mbta_lookup.get(nbhd)
+                            if not mbta_row:
+                                continue
+                            grade = str(mbta_row.get("transit_grade", "MODERATE")).upper()
+                            f["properties"]["transit_score"] = mbta_row.get("transit_score", 0)
+                            f["properties"]["transit_grade"] = grade
+                            f["properties"]["rapid_lines"]   = mbta_row.get("rapid_transit_lines") or "Bus only"
+                            f["properties"]["total_stops"]   = mbta_row.get("total_stops", 0)
+                            f["properties"]["fill_color"]    = TRANSIT_FILL.get(grade, [100, 100, 100, 140])
+                            transit_features.append(f)
+
+                        layer = pdk.Layer(
+                            "GeoJsonLayer",
+                            data={"type": "FeatureCollection", "features": transit_features},
+                            filled=True, stroked=True, pickable=True, auto_highlight=True,
+                            get_fill_color="properties.fill_color",
+                            get_line_color=[255, 255, 255, 60],
+                            line_width_min_pixels=1,
+                        )
+                        view = pdk.ViewState(latitude=42.35, longitude=-71.08, zoom=10.2, pitch=0)
+                        deck = pdk.Deck(
+                            layers=[layer],
+                            initial_view_state=view,
+                            tooltip={
+                                "html": "<b>{neighborhood}</b><br/>"
+                                        "Transit Score: <b>{transit_score}</b>/100 · <b>{transit_grade}</b><br/>"
+                                        "Lines: <b>{rapid_lines}</b><br/>"
+                                        "Total Stops: <b>{total_stops}</b>",
+                                "style": {"backgroundColor":"#1e293b","color":"#e2e8f0",
+                                          "fontSize":"12px","borderRadius":"8px","padding":"8px"},
+                            },
+                            map_style="mapbox://styles/mapbox/dark-v10",
+                        )
+                        st.pydeck_chart(deck, use_container_width=True, height=440)
+                        l1, l2, l3, l4 = st.columns(4)
+                        l1.markdown('<span style="color:#1E8449;">■</span> **Excellent**', unsafe_allow_html=True)
+                        l2.markdown('<span style="color:#82E0AA;">■</span> **Good**',      unsafe_allow_html=True)
+                        l3.markdown('<span style="color:#F1C40F;">■</span> **Moderate**',  unsafe_allow_html=True)
+                        l4.markdown('<span style="color:#C0392B;">■</span> **Limited**',   unsafe_allow_html=True)
+                    else:
+                        st.info("Map data not available.")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="section-title">Transit Grade Distribution</div>'
+                        '<div class="section-subtitle">All neighborhoods · colored by grade</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if mbta:
+                        df_t = pd.DataFrame(mbta).drop_duplicates("neighborhood")
+                        grade_counts = df_t.groupby("transit_grade").size().reset_index(name="count")
+                        total_g = grade_counts["count"].sum()
+                        grade_counts["pct"] = (grade_counts["count"] / total_g * 100).round(1)
+                        grade_counts["legend_label"] = grade_counts.apply(
+                            lambda r: f'{r["transit_grade"]}  ({r["count"]} · {r["pct"]:.1f}%)', axis=1
+                        )
+
+                        grade_order  = ["EXCELLENT", "GOOD", "MODERATE", "LIMITED"]
+                        grade_colors = ["#1E8449", "#82E0AA", "#F1C40F", "#C0392B"]
+
+                        donut = alt.Chart(grade_counts).mark_arc(
+                            innerRadius=80, outerRadius=160,
+                            stroke="#1a1a2e", strokeWidth=2,
+                        ).encode(
+                            theta=alt.Theta("count:Q"),
+                            color=alt.Color("legend_label:N",
+                                scale=alt.Scale(
+                                    domain=grade_counts["legend_label"].tolist(),
+                                    range=grade_colors[:len(grade_counts)]),
+                                legend=alt.Legend(
+                                    title=None, orient="bottom",
+                                    direction="vertical",
+                                    labelFontSize=12, symbolSize=120,
+                                )),
+                            tooltip=[
+                                alt.Tooltip("transit_grade:N", title="Grade"),
+                                alt.Tooltip("count:Q",         title="Neighborhoods"),
+                                alt.Tooltip("pct:Q",           title="%", format=".1f"),
+                            ],
+                        )
+
+                        # Pct labels on slices
+                        labels = alt.Chart(grade_counts).mark_text(
+                            radius=185, fontSize=12,
+                            fontWeight="bold", color="#e2e8f0",
+                        ).encode(
+                            theta=alt.Theta("count:Q", stack=True),
+                            text=alt.Text("pct:Q", format=".1f"),
+                        )
+
+                        st.altair_chart(
+                            alt.layer(donut, labels).properties(height=480),
+                            use_container_width=True,
+                        )
+
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # Row 2: Stop type breakdown stacked bar
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown(
-                    '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:8px;">'
-                    '<span style="color:#1d4ed8;font-weight:600;">■ Excellent</span>'
-                    '<span style="color:#60a5fa;font-weight:600;">■ Good</span>'
-                    '<span style="color:#bae6fd;font-weight:600;">■ Moderate</span>'
-                    '<span style="color:#475569;font-weight:600;">■ Limited</span>'
-                    '&nbsp;&nbsp;|&nbsp;&nbsp;'
-                    '<span style="color:#ef4444;">● Red Line</span>'
-                    '<span style="color:#22c55e;">● Green Line</span>'
-                    '<span style="color:#3b82f6;">● Blue Line</span>'
-                    '<span style="color:#f97316;">● Orange Line</span>'
-                    '<span style="color:#94a3b8;">● Bus/Other</span>'
-                    '</div>',
+                    '<div class="section-title">Stop Type Breakdown — Top 20 Neighborhoods</div>'
+                    '<div class="section-subtitle">Rapid transit · commuter rail · bus · ferry</div>',
                     unsafe_allow_html=True,
                 )
-            else:
-                st.info("Transit map data not available.")
-
-            col1, col2 = st.columns(2, gap="medium")
-            with col1:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">MBTA Transit Scores</div>', unsafe_allow_html=True)
                 if mbta:
                     df_t = pd.DataFrame(mbta[:20])
-                    bars = alt.Chart(df_t).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#60a5fa",
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("transit_score:Q", scale=alt.Scale(domain=[0, 100]),
-                                axis=alt.Axis(title="Transit Score")),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("transit_score:Q", format=".1f"),
-                                 "transit_grade:N", "rapid_transit_lines:N",
-                                 alt.Tooltip("total_routes:Q", title="Routes"),
-                                 alt.Tooltip("pct_accessible_stops:Q", title="% Accessible", format=".1f")],
-                    )
-                    st.altair_chart(bars.properties(height=480), use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+                    df_melt = df_t[[
+                        "neighborhood", "rapid_transit_stops",
+                        "commuter_rail_stops", "bus_stops", "ferry_stops"
+                    ]].melt(id_vars="neighborhood", var_name="Stop Type", value_name="Count")
 
-            with col2:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Stop Type Breakdown — Top 15</div>', unsafe_allow_html=True)
-                if mbta:
-                    df_t = pd.DataFrame(mbta[:15])
-                    df_melt = df_t[["neighborhood","rapid_transit_stops","commuter_rail_stops","bus_stops"]].melt(
-                        id_vars="neighborhood", var_name="Stop Type", value_name="Count"
-                    )
+                    STOP_TYPE_LABELS = {
+                        "rapid_transit_stops": "Rapid Transit",
+                        "commuter_rail_stops": "Commuter Rail",
+                        "bus_stops":           "Bus",
+                        "ferry_stops":         "Ferry",
+                    }
+                    df_melt["Stop Type"] = df_melt["Stop Type"].map(STOP_TYPE_LABELS)
+
                     stacked = alt.Chart(df_melt).mark_bar().encode(
-                        y=alt.Y("neighborhood:N", sort=None,
+                        y=alt.Y("neighborhood:N",
+                                sort=alt.EncodingSortField("Count", order="descending"),
                                 axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
                         x=alt.X("Count:Q", axis=alt.Axis(title="Stop Count")),
                         color=alt.Color("Stop Type:N",
                                         scale=alt.Scale(
-                                            domain=["rapid_transit_stops","commuter_rail_stops","bus_stops"],
-                                            range=["#60a5fa","#a78bfa","#34d399"]),
-                                        legend=alt.Legend(title=None, orient="bottom")),
+                                            domain=["Rapid Transit","Commuter Rail","Bus","Ferry"],
+                                            range=["#1d4ed8","#a78bfa","#60a5fa","#34d399"]),
+                                        legend=alt.Legend(title=None, orient="bottom",
+                                                          direction="horizontal")),
                         tooltip=["neighborhood:N","Stop Type:N","Count:Q"],
                     )
                     st.altair_chart(stacked.properties(height=480), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
+
+            # ══ SINGLE NEIGHBORHOOD ═══════════════════════════════════════════
+            else:
+                nbhd_t = df_t.iloc[0] if mbta else {}
+
+                # AI narrative
+                desc = nbhd_t.get("description") if mbta else None
+                if desc:
+                    st.markdown(
+                        f'<div class="narrative-box-blue">'
+                        f'<div class="narrative-title">{hood_filter} — Transit Summary</div>'
+                        f'{desc}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # Row 1: Stop map + route list
+                col1, col2 = st.columns(2, gap="medium")
+
+                with col1:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="section-title">Transit Coverage — {hood_filter}</div>'
+                        f'<div class="section-subtitle">Stops within neighborhood · in sequence order</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    with st.spinner("Loading stop sequences..."):
+                        seq_data = load_stop_sequence(hood_filter)
+
+                    seq_routes = seq_data.get("routes", [])
+
+                    if seq_routes:
+                        TYPE_COLORS = {
+                            "Heavy Rail (Subway)": "#1d4ed8",
+                            "Light Rail":          "#059669",
+                            "Commuter Rail":       "#7c3aed",
+                            "Bus":                 "#475569",
+                            "Ferry":               "#0891b2",
+                        }
+                        TYPE_ICONS = {
+                            "Heavy Rail (Subway)": "🚇",
+                            "Light Rail":          "🚊",
+                            "Commuter Rail":       "🚆",
+                            "Bus":                 "🚌",
+                            "Ferry":               "⛴️",
+                        }
+
+                        # Sort — rapid first, bus last
+                        TYPE_ORDER_RANK = {
+                            "Heavy Rail (Subway)": 1,
+                            "Light Rail":          2,
+                            "Commuter Rail":       3,
+                            "Ferry":               4,
+                            "Bus":                 5,
+                        }
+                        seq_routes_sorted = sorted(
+                            seq_routes,
+                            key=lambda x: (
+                                TYPE_ORDER_RANK.get(x["route_type"], 9),
+                                -len(x["stops"])
+                            )
+                        )
+
+                        html = '<div style="overflow-y:auto;max-height:460px;padding-right:4px;">'
+
+                        for route in seq_routes_sorted:
+                            rname  = route["route_name"]
+                            rtype  = route["route_type"]
+                            stops  = route["stops"]
+                            color  = TYPE_COLORS.get(rtype, "#475569")
+                            icon   = TYPE_ICONS.get(rtype, "🚌")
+
+                            # Route header
+                            html += (
+                                f'<div style="margin:14px 0 8px;">'
+                                f'<div style="display:flex;align-items:center;gap:6px;'
+                                f'margin-bottom:6px;">'
+                                f'<span style="background:{color};color:#fff;'
+                                f'padding:2px 10px;border-radius:999px;'
+                                f'font-size:10px;font-weight:700;">'
+                                f'{icon} {rname}</span>'
+                                f'<span style="color:rgba(255,255,255,0.25);font-size:10px;">'
+                                f'{len(stops)} stop{"s" if len(stops)!=1 else ""} in {hood_filter}'
+                                f'</span></div>'
+                            )
+
+                            # Stop chain
+                            html += '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:0;">'
+
+                            for i, stop in enumerate(stops):
+                                acc = " ♿" if stop["accessible"] else ""
+                                stop_name = stop["stop_name"]
+                                # Shorten long stop names
+                                short = stop_name if len(stop_name) <= 22 else stop_name[:20] + "…"
+
+                                # Stop bubble
+                                html += (
+                                    f'<div style="display:flex;align-items:center;">'
+
+                                    f'<div style="background:rgba(255,255,255,0.06);'
+                                    f'border:1.5px solid {color};'
+                                    f'border-radius:8px;padding:4px 8px;'
+                                    f'font-size:10px;color:#e2e8f0;'
+                                    f'white-space:nowrap;" title="{stop_name}{acc}">'
+                                    f'{short}{acc}'
+                                    f'</div>'
+                                )
+
+                                # Arrow connector (not after last stop)
+                                if i < len(stops) - 1:
+                                    html += (
+                                        f'<div style="color:{color};font-size:12px;'
+                                        f'margin:0 2px;opacity:0.7;">→</div>'
+                                    )
+
+                                html += '</div>'
+
+                            html += '</div>'  # stop chain
+                            html += '</div>'  # route block
+
+                            # Divider
+                            html += '<div style="height:1px;background:rgba(255,255,255,0.05);margin:4px 0;"></div>'
+
+                        html += '</div>'
+                        st.markdown(html, unsafe_allow_html=True)
+
+                        total_routes = len(seq_routes)
+                        st.caption(
+                            f"**{total_routes}** routes · direction: outbound · "
+                            f"stops shown are within {hood_filter} only"
+                        )
+                    else:
+                        st.info("No stop sequence data available.")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="section-title">Routes Serving {hood_filter}</div>'
+                        f'<div class="section-subtitle">All MBTA routes · grouped by type</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    with st.spinner("Loading routes..."):
+                        routes_data = load_transit_routes(hood_filter)
+
+                    routes = routes_data.get("routes", [])
+
+                    if routes:
+                        TYPE_COLORS = {
+                            "Heavy Rail":    ("#1d4ed8", "#dbeafe"),
+                            "Light Rail":    ("#059669", "#d1fae5"),
+                            "Commuter Rail": ("#7c3aed", "#ede9fe"),
+                            "Ferry":         ("#0891b2", "#cffafe"),
+                            "Bus":           ("#374151", "#e5e7eb"),
+                        }
+                        TYPE_ICONS = {
+                            "Heavy Rail":    "🚇",
+                            "Light Rail":    "🚊",
+                            "Commuter Rail": "🚆",
+                            "Ferry":         "⛴️",
+                            "Bus":           "🚌",
+                        }
+
+                        from collections import defaultdict
+                        grouped = defaultdict(list)
+                        for r in routes:
+                            grouped[r["route_type"]].append(r)
+
+                        type_order = ["Heavy Rail","Light Rail","Commuter Rail","Ferry","Bus"]
+
+                        html = '<div style="max-height:420px;overflow-y:auto;padding-right:4px;">'
+
+                        for rtype in type_order:
+                            if rtype not in grouped:
+                                continue
+                            bg, fg = TYPE_COLORS.get(rtype, ("#374151","#e5e7eb"))
+                            icon   = TYPE_ICONS.get(rtype, "🚌")
+
+                            # Section header
+                            html += (
+                                f'<div style="display:flex;align-items:center;gap:8px;'
+                                f'margin:14px 0 8px;">'
+                                f'<span style="background:{bg};color:{fg};padding:3px 12px;'
+                                f'border-radius:999px;font-size:10px;font-weight:700;'
+                                f'letter-spacing:0.05em;">{icon} {rtype.upper()}</span>'
+                                f'<span style="color:rgba(255,255,255,0.25);font-size:10px;">'
+                                f'{len(grouped[rtype])} route{"s" if len(grouped[rtype])>1 else ""}'
+                                f'</span></div>'
+                            )
+
+                            # Route cards grid
+                            html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px;">'
+                            for r in grouped[rtype]:
+                                acc_badge = (
+                                    '<span style="font-size:9px;color:#4fffb0;'
+                                    'margin-left:4px;">♿</span>'
+                                    if r["accessible"] else ""
+                                )
+                                stop_bar_pct = min(100, r["stop_count"] * 4)
+                                html += (
+                                    f'<div style="background:rgba(255,255,255,0.04);'
+                                    f'border:1px solid rgba(255,255,255,0.08);'
+                                    f'border-radius:10px;padding:8px 10px;'
+                                    f'position:relative;overflow:hidden;">'
+
+                                    # Progress bar background
+                                    f'<div style="position:absolute;bottom:0;left:0;'
+                                    f'height:3px;width:{stop_bar_pct}%;'
+                                    f'background:{bg};opacity:0.5;'
+                                    f'border-radius:0 0 0 10px;"></div>'
+
+                                    # Route name
+                                    f'<div style="color:#e2e8f0;font-size:10px;'
+                                    f'font-weight:600;line-height:1.3;margin-bottom:5px;">'
+                                    f'{r["route_name"]}{acc_badge}</div>'
+
+                                    # Stop count
+                                    f'<div style="display:flex;align-items:center;'
+                                    f'justify-content:space-between;">'
+                                    f'<span style="color:rgba(255,255,255,0.35);'
+                                    f'font-size:9px;text-transform:uppercase;'
+                                    f'letter-spacing:0.05em;">stops in neighborhood</span>'
+                                    f'<span style="color:{fg};background:{bg};'
+                                    f'padding:1px 7px;border-radius:999px;'
+                                    f'font-size:10px;font-weight:700;">'
+                                    f'{r["stop_count"]}</span>'
+                                    f'</div>'
+
+                                    f'</div>'
+                                )
+                            html += '</div>'
+
+                        html += '</div>'
+                        st.markdown(html, unsafe_allow_html=True)
+                    else:
+                        st.info("No route data available.")
+
+                # Row 2: Stop type donut + accessibility donut
+                col3, col4 = st.columns(2, gap="medium")
+
+                with col3:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Stop Type Mix</div>', unsafe_allow_html=True)
+                    if mbta:
+                        df_types = pd.DataFrame([
+                            {"Type": "Rapid Transit", "Count": nbhd_t.get("rapid_transit_stops", 0) or 0},
+                            {"Type": "Commuter Rail", "Count": nbhd_t.get("commuter_rail_stops", 0) or 0},
+                            {"Type": "Bus",           "Count": nbhd_t.get("bus_stops", 0) or 0},
+                            {"Type": "Ferry",         "Count": nbhd_t.get("ferry_stops", 0) or 0},
+                        ])
+                        df_types = df_types[df_types["Count"] > 0]
+                        total_s = df_types["Count"].sum()
+                        df_types["Pct"] = (df_types["Count"] / total_s * 100).round(1)
+                        df_types["legend_label"] = df_types.apply(
+                            lambda r: f'{r["Type"]} ({r["Count"]})', axis=1
+                        )
+
+                        if not df_types.empty:
+                            donut = alt.Chart(df_types).mark_arc(
+                                innerRadius=55, outerRadius=95,
+                                stroke="#1a1a2e", strokeWidth=2,
+                            ).encode(
+                                theta=alt.Theta("Count:Q"),
+                                color=alt.Color("legend_label:N",
+                                    scale=alt.Scale(
+                                        domain=df_types["legend_label"].tolist(),
+                                        range=["#1d4ed8","#a78bfa","#60a5fa","#34d399"][:len(df_types)]),
+                                    legend=alt.Legend(title=None, orient="bottom",
+                                                      direction="horizontal",
+                                                      labelFontSize=11)),
+                                tooltip=[
+                                    alt.Tooltip("Type:N",  title="Type"),
+                                    alt.Tooltip("Count:Q", title="Stops"),
+                                    alt.Tooltip("Pct:Q",   title="%", format=".1f"),
+                                ],
+                            )
+
+                            # Percentage labels on slices
+                            text = alt.Chart(df_types).mark_text(
+                                radius=115, fontSize=11,
+                                fontWeight="bold", color="#e2e8f0",
+                            ).encode(
+                                theta=alt.Theta("Count:Q", stack=True),
+                                text=alt.Text("Pct:Q", format=".0f"),
+                            ).transform_calculate(
+                                label='"%" + datum.Pct'
+                            )
+
+                            st.altair_chart(
+                                alt.layer(donut, text).properties(height=390),
+                                use_container_width=True,
+                            )
+
+                        # ── Rapid Transit stop details ─────────────────────
+                        rapid_lines = nbhd_t.get("rapid_transit_lines")
+                        if rapid_lines and rapid_lines != "Bus only":
+                            st.markdown(
+                                '<div style="margin-top:10px;">'
+                                '<div style="color:rgba(255,255,255,0.4);font-size:10px;'
+                                'text-transform:uppercase;letter-spacing:0.08em;'
+                                'margin-bottom:6px;">Rapid Transit Lines</div>',
+                                unsafe_allow_html=True,
+                            )
+                            LINE_COLORS = {
+                                "red":      ("#ef4444","#fff"),
+                                "green":    ("#22c55e","#fff"),
+                                "orange":   ("#f97316","#fff"),
+                                "blue":     ("#3b82f6","#fff"),
+                                "mattapan": ("#ef4444","#fff"),
+                                "silver":   ("#94a3b8","#fff"),
+                            }
+                            pills_html = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">'
+                            for line in rapid_lines.split(","):
+                                line = line.strip()
+                                bg, fg = "#64748b", "#fff"
+                                for k, (b, f) in LINE_COLORS.items():
+                                    if k in line.lower():
+                                        bg, fg = b, f
+                                        break
+                                pills_html += (
+                                    f'<span style="background:{bg};color:{fg};'
+                                    f'padding:3px 10px;border-radius:999px;'
+                                    f'font-size:11px;font-weight:700;">{line}</span>'
+                                )
+                            pills_html += '</div>'
+                            st.markdown(pills_html, unsafe_allow_html=True)
+
+
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col4:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Accessibility Breakdown</div>', unsafe_allow_html=True)
+                    if mbta:
+                        total_s   = nbhd_t.get("total_stops", 0) or 0
+                        acc_pct   = nbhd_t.get("pct_accessible_stops", 0) or 0
+                        acc_count = round(total_s * acc_pct / 100)
+                        inacc     = total_s - acc_count
+                        df_acc = pd.DataFrame([
+                            {"Type": f"Accessible ({acc_pct:.1f}%)",     "Count": acc_count},
+                            {"Type": f"Not Accessible ({100-acc_pct:.1f}%)", "Count": inacc},
+                        ])
+                        donut_acc = alt.Chart(df_acc).mark_arc(
+                            innerRadius=55, outerRadius=95,
+                            stroke="#1a1a2e", strokeWidth=2,
+                        ).encode(
+                            theta=alt.Theta("Count:Q"),
+                            color=alt.Color("Type:N",
+                                scale=alt.Scale(
+                                    domain=[f"Accessible ({acc_pct:.1f}%)",
+                                            f"Not Accessible ({100-acc_pct:.1f}%)"],
+                                    range=["#22c55e","#475569"]),
+                                legend=alt.Legend(title=None, orient="bottom",
+                                                  direction="horizontal")),
+                            tooltip=["Type:N", alt.Tooltip("Count:Q", title="Stops")],
+                        )
+                        st.altair_chart(donut_acc.properties(height=320), use_container_width=True)
+
+                        # Stats
+                        for label, val in [
+                            ("Total Stops",          f'{total_s}'),
+                            ("Accessible Stops",      f'{acc_count} ({acc_pct:.1f}%)'),
+                            ("Rapid Transit Stops",   f'{nbhd_t.get("rapid_transit_stops","—")}'),
+                            ("Bus Stops",             f'{nbhd_t.get("bus_stops","—")}'),
+                            ("Total Routes",          f'{nbhd_t.get("total_routes","—")}'),
+                        ]:
+                            st.markdown(
+                                f'<div style="display:flex;justify-content:space-between;'
+                                f'padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.06);">'
+                                f'<span style="color:rgba(255,255,255,0.45);font-size:12px;">{label}</span>'
+                                f'<span style="color:#e2e8f0;font-size:12px;font-weight:500;">{val}</span>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                    st.markdown('</div>', unsafe_allow_html=True)
 
         # ── GROCERY ───────────────────────────────────────────────────────────
         elif domain_filter == "Grocery":
@@ -1750,52 +2662,502 @@ with tab_overview:
             neighborhoods_data = domain_data.get("neighborhoods", [])
             summary = domain_data.get("summary", {})
 
-            st.markdown(
-                f'<div class="narrative-box">'
-                f'Total stations: <b>{summary.get("total_stations_citywide", "—")}</b> · '
-                f'Total docks: <b>{summary.get("total_docks_citywide", "—")}</b>'
-                f'</div>', unsafe_allow_html=True,
-            )
+            # ── KPI cards ─────────────────────────────────────────────────────
             if neighborhoods_data:
-                df_bb = pd.DataFrame(neighborhoods_data[:20])
+                df_bb = pd.DataFrame(neighborhoods_data)
+
+                if not hood_filter:
+                    total_stations = int(df_bb["total_stations"].sum())
+                    total_docks    = int(df_bb["total_docks"].sum())
+                    avg_score      = round(df_bb["bikeshare_score"].mean(), 1)
+                    top_row        = df_bb.loc[df_bb["bikeshare_score"].idxmax()]
+                    n_with         = int((df_bb["total_stations"] > 0).sum())
+
+                    render_metric_cards([
+                        ("Total Stations",         f'{total_stations:,}',   "Across all neighborhoods"),
+                        ("Total Docks",             f'{total_docks:,}',     "Bike capacity citywide"),
+                        ("Avg BlueBikes Score",     f'{avg_score}',          "Across all neighborhoods"),
+                        ("Neighborhoods Covered",   f'{n_with}',             f'of {len(df_bb)} neighborhoods'),
+                        ("Top BlueBikes Neighborhood", top_row["neighborhood"],
+                         f'Score: {top_row["bikeshare_score"]:.0f} · {top_row["total_stations"]} stations'),
+                    ])
+                else:
+                    nbhd_bb = df_bb.iloc[0] if not df_bb.empty else {}
+
+                    # Rank
+                    all_bb_data = load_domain("bluebikes")
+                    all_bb      = all_bb_data.get("neighborhoods", [])
+                    if all_bb:
+                        df_all_bb = pd.DataFrame(all_bb).sort_values(
+                            "bikeshare_score", ascending=False
+                        ).reset_index(drop=True)
+                        rank_row = df_all_bb[
+                            df_all_bb["neighborhood"].str.upper() == hood_filter.upper()
+                        ]
+                        bb_rank    = int(rank_row.index[0]) + 1 if not rank_row.empty else "—"
+                        total_nbhds = len(df_all_bb)
+                    else:
+                        bb_rank, total_nbhds = "—", "—"
+
+                    render_metric_cards([
+                        ("BlueBikes Score",
+                         f'{nbhd_bb.get("bikeshare_score","—")}',
+                         nbhd_bb.get("bikeshare_grade","—")),
+
+                        ("BlueBikes Rank",
+                         f'#{bb_rank}',
+                         f'of {total_nbhds} neighborhoods'),
+
+                        ("Total Stations",
+                         f'{nbhd_bb.get("total_stations","—")}',
+                         "In this neighborhood"),
+
+                        ("Total Docks",
+                         f'{nbhd_bb.get("total_docks","—")}',
+                         f'Avg {nbhd_bb.get("avg_docks_per_station","—")} per station'),
+
+                        ("Stations per Sq Mile",
+                         f'{nbhd_bb.get("stations_per_sqmile","—")}',
+                         "Coverage density"),
+                    ])
+
+            # ══ CITY-WIDE VIEW ════════════════════════════════════════════════
+            if not hood_filter:
                 col1, col2 = st.columns(2, gap="medium")
+
                 with col1:
                     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="section-title">BlueBikes Scores</div>', unsafe_allow_html=True)
-                    bars = alt.Chart(df_bb).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#34d399",
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("bikeshare_score:Q", scale=alt.Scale(domain=[0, 100]),
-                                axis=alt.Axis(title="BlueBikes Score")),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("bikeshare_score:Q", format=".1f"),
-                                 alt.Tooltip("total_stations:Q", title="Stations"),
-                                 alt.Tooltip("total_docks:Q", title="Docks"),
-                                 alt.Tooltip("stations_per_sqmile:Q", format=".2f", title="Stations/sqmi")],
+                    st.markdown(
+                        '<div class="section-title">BlueBikes Score Map</div>'
+                        '<div class="section-subtitle">Green = excellent coverage · Red = limited · Hover for details</div>',
+                        unsafe_allow_html=True,
                     )
-                    st.altair_chart(bars.properties(height=480), use_container_width=True)
+                    map_data = load_map()
+                    features = map_data.get("features", [])
+                    if features and neighborhoods_data:
+                        import pydeck as pdk
+                        BB_FILL = {
+                            "EXCELLENT": [30,  132, 73,  200],
+                            "GOOD":      [130, 224, 170, 180],
+                            "MODERATE":  [241, 196, 15,  180],
+                            "LIMITED":   [192, 57,  43,  200],
+                        }
+                        bb_lookup = {r["neighborhood"].upper(): r for r in neighborhoods_data}
+                        bb_features = []
+                        for f in features:
+                            nbhd    = f["properties"]["neighborhood"].upper()
+                            bb_row  = bb_lookup.get(nbhd)
+                            if not bb_row:
+                                continue
+                            grade = str(bb_row.get("bikeshare_grade", "MODERATE")).upper()
+                            f["properties"]["bikeshare_score"]  = bb_row.get("bikeshare_score", 0)
+                            f["properties"]["bikeshare_grade"]  = grade
+                            f["properties"]["total_stations"]   = bb_row.get("total_stations", 0)
+                            f["properties"]["total_docks"]      = bb_row.get("total_docks", 0)
+                            f["properties"]["fill_color"]       = BB_FILL.get(grade, [100, 100, 100, 140])
+                            bb_features.append(f)
+
+                        layer = pdk.Layer(
+                            "GeoJsonLayer",
+                            data={"type": "FeatureCollection", "features": bb_features},
+                            filled=True, stroked=True, pickable=True, auto_highlight=True,
+                            get_fill_color="properties.fill_color",
+                            get_line_color=[255, 255, 255, 60],
+                            line_width_min_pixels=1,
+                        )
+                        deck = pdk.Deck(
+                            layers=[layer],
+                            initial_view_state=pdk.ViewState(
+                                latitude=42.35, longitude=-71.08, zoom=10.2, pitch=0
+                            ),
+                            tooltip={
+                                "html": "<b>{neighborhood}</b><br/>"
+                                        "Score: <b>{bikeshare_score}</b>/100 · <b>{bikeshare_grade}</b><br/>"
+                                        "Stations: <b>{total_stations}</b> · Docks: <b>{total_docks}</b>",
+                                "style": {"backgroundColor":"#1e293b","color":"#e2e8f0",
+                                          "fontSize":"12px","borderRadius":"8px","padding":"8px"},
+                            },
+                            map_style="mapbox://styles/mapbox/dark-v10",
+                        )
+                        st.pydeck_chart(deck, use_container_width=True, height=440)
+                        l1, l2, l3, l4 = st.columns(4)
+                        l1.markdown('<span style="color:#1E8449;">■</span> **Excellent**', unsafe_allow_html=True)
+                        l2.markdown('<span style="color:#82E0AA;">■</span> **Good**',      unsafe_allow_html=True)
+                        l3.markdown('<span style="color:#F1C40F;">■</span> **Moderate**',  unsafe_allow_html=True)
+                        l4.markdown('<span style="color:#C0392B;">■</span> **Limited**',   unsafe_allow_html=True)
+                    else:
+                        st.info("Map data not available.")
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 with col2:
                     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="section-title">Station Size Mix</div>', unsafe_allow_html=True)
-                    df_melt = df_bb[["neighborhood","large_stations","medium_stations","small_stations"]].melt(
-                        id_vars="neighborhood", var_name="Size", value_name="Count"
+                    st.markdown(
+                        '<div class="section-title">BlueBikes Grade Distribution</div>'
+                        '<div class="section-subtitle">All neighborhoods · colored by grade</div>',
+                        unsafe_allow_html=True,
                     )
+                    if neighborhoods_data:
+                        df_bb = pd.DataFrame(neighborhoods_data).drop_duplicates("neighborhood")
+                        grade_counts = df_bb.groupby("bikeshare_grade").size().reset_index(name="count")
+                        total_g = grade_counts["count"].sum()
+                        grade_counts["pct"] = (grade_counts["count"] / total_g * 100).round(1)
+                        grade_counts["legend_label"] = grade_counts.apply(
+                            lambda r: f'{r["bikeshare_grade"]}  ({r["count"]} · {r["pct"]:.1f}%)', axis=1
+                        )
+                        grade_order  = ["EXCELLENT","GOOD","MODERATE","LIMITED"]
+                        grade_colors = ["#1E8449","#82E0AA","#F1C40F","#C0392B"]
+
+                        donut = alt.Chart(grade_counts).mark_arc(
+                            innerRadius=80, outerRadius=160,
+                            stroke="#1a1a2e", strokeWidth=2,
+                        ).encode(
+                            theta=alt.Theta("count:Q"),
+                            color=alt.Color("legend_label:N",
+                                scale=alt.Scale(
+                                    domain=grade_counts["legend_label"].tolist(),
+                                    range=grade_colors[:len(grade_counts)]),
+                                legend=alt.Legend(title=None, orient="bottom",
+                                                  direction="vertical",
+                                                  labelFontSize=12, symbolSize=120)),
+                            tooltip=[
+                                alt.Tooltip("bikeshare_grade:N", title="Grade"),
+                                alt.Tooltip("count:Q",           title="Neighborhoods"),
+                                alt.Tooltip("pct:Q",             title="%", format=".1f"),
+                            ],
+                        )
+                        labels = alt.Chart(grade_counts).mark_text(
+                            radius=185, fontSize=12,
+                            fontWeight="bold", color="#e2e8f0",
+                        ).encode(
+                            theta=alt.Theta("count:Q", stack=True),
+                            text=alt.Text("pct:Q", format=".1f"),
+                        )
+                        st.altair_chart(
+                            alt.layer(donut, labels).properties(height=480),
+                            use_container_width=True,
+                        )
+
+                        # Top 5
+                        st.markdown(
+                            '<div style="color:rgba(255,255,255,0.4);font-size:10px;'
+                            'text-transform:uppercase;letter-spacing:0.08em;'
+                            'margin:10px 0 6px;">Top 5 by BlueBikes Score</div>',
+                            unsafe_allow_html=True,
+                        )
+                        top5 = df_bb.nlargest(5, "bikeshare_score")
+                        grade_color_map = dict(zip(grade_order, grade_colors))
+                        for _, r in top5.iterrows():
+                            grade = str(r["bikeshare_grade"]).upper()
+                            color = grade_color_map.get(grade, "#475569")
+                            st.markdown(
+                                f'<div style="display:flex;justify-content:space-between;'
+                                f'align-items:center;padding:5px 0;'
+                                f'border-bottom:1px solid rgba(255,255,255,0.06);">'
+                                f'<span style="color:#e2e8f0;font-size:12px;">{r["neighborhood"]}</span>'
+                                f'<div style="display:flex;align-items:center;gap:8px;">'
+                                f'<span style="color:rgba(255,255,255,0.4);font-size:11px;">'
+                                f'{r["bikeshare_score"]:.0f}</span>'
+                                f'<span style="background:{color};color:#fff;padding:1px 8px;'
+                                f'border-radius:999px;font-size:9px;font-weight:700;">{grade}</span>'
+                                f'</div></div>',
+                                unsafe_allow_html=True,
+                            )
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # Row 2: Station size breakdown bar
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="section-title">Station Size Mix — Top 20 Neighborhoods</div>'
+                    '<div class="section-subtitle">Large · Medium · Small stations</div>',
+                    unsafe_allow_html=True,
+                )
+                if neighborhoods_data:
+                    df_bb = pd.DataFrame(neighborhoods_data[:20])
+                    df_melt = df_bb[[
+                        "neighborhood", "large_stations", "medium_stations", "small_stations"
+                    ]].melt(id_vars="neighborhood", var_name="Size", value_name="Count")
+                    SIZE_LABELS = {
+                        "large_stations":  "Large (≥23 docks)",
+                        "medium_stations": "Medium (15-22 docks)",
+                        "small_stations":  "Small (<15 docks)",
+                    }
+                    df_melt["Size"] = df_melt["Size"].map(SIZE_LABELS)
                     stacked = alt.Chart(df_melt).mark_bar().encode(
-                        y=alt.Y("neighborhood:N", sort=None,
+                        y=alt.Y("neighborhood:N",
+                                sort=alt.EncodingSortField("Count", order="descending"),
                                 axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
                         x=alt.X("Count:Q", axis=alt.Axis(title="Station Count")),
                         color=alt.Color("Size:N",
                                         scale=alt.Scale(
-                                            domain=["large_stations","medium_stations","small_stations"],
-                                            range=["#34d399","#60a5fa","#a78bfa"]),
-                                        legend=alt.Legend(title=None, orient="bottom")),
+                                            domain=["Large (≥23 docks)","Medium (15-22 docks)","Small (<15 docks)"],
+                                            range=["#1E8449","#82E0AA","#F1C40F"]),
+                                        legend=alt.Legend(title=None, orient="bottom",
+                                                          direction="horizontal")),
                         tooltip=["neighborhood:N","Size:N","Count:Q"],
                     )
                     st.altair_chart(stacked.properties(height=480), use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # ══ SINGLE NEIGHBORHOOD ═══════════════════════════════════════════
+            else:
+                nbhd_bb = neighborhoods_data[0] if neighborhoods_data else {}
+
+                # AI narrative
+                desc = nbhd_bb.get("description") if neighborhoods_data else None
+                if desc:
+                    st.markdown(
+                        f'<div class="narrative-box-blue">'
+                        f'<div class="narrative-title">{hood_filter} — BlueBikes Summary</div>'
+                        f'{desc}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                col1, col2 = st.columns(2, gap="medium")
+
+                with col1:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="section-title">Station Map — {hood_filter}</div>'
+                        f'<div class="section-subtitle">'
+                        f'🟢 Large &nbsp;·&nbsp; 🔵 Medium &nbsp;·&nbsp; 🟡 Small · size = dock count</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    with st.spinner("Loading station map..."):
+                        stations_data  = load_bluebikes_stations(hood_filter)
+                        boundary_data  = load_neighborhood_boundary(hood_filter)
+
+                    stations    = stations_data.get("stations", [])
+                    coordinates = boundary_data.get("coordinates", [])
+
+                    if stations:
+                        import pydeck as pdk
+
+                        TIER_COLORS = {
+                            "LARGE":  [30,  132, 73,  230],
+                            "MEDIUM": [96,  165, 250, 220],
+                            "SMALL":  [241, 196, 15,  220],
+                        }
+
+                        df_st = pd.DataFrame(stations)
+                        df_st.columns = [c.lower() for c in df_st.columns]
+                        df_st["color"]  = df_st["capacity_tier"].map(TIER_COLORS)
+                        df_st["radius"] = df_st["total_docks"] * 3
+
+                        layers = []
+
+                        if coordinates:
+                            boundary_geojson = {
+                                "type": "FeatureCollection",
+                                "features": [{
+                                    "type": "Feature",
+                                    "geometry": {
+                                        "type": "Polygon",
+                                        "coordinates": [[
+                                            [p["lng"], p["lat"]] for p in coordinates
+                                        ]]
+                                    },
+                                    "properties": {}
+                                }]
+                            }
+                            layers.append(pdk.Layer(
+                                "GeoJsonLayer",
+                                data=boundary_geojson,
+                                filled=False, stroked=True,
+                                get_line_color=[255, 255, 255, 160],
+                                line_width_min_pixels=2,
+                            ))
+
+                        layers.append(pdk.Layer(
+                            "ScatterplotLayer",
+                            data=df_st,
+                            get_position=["lng", "lat"],
+                            get_fill_color="color",
+                            get_radius="radius",
+                            radius_min_pixels=6,
+                            radius_max_pixels=18,
+                            pickable=True,
+                            auto_highlight=True,
+                            opacity=0.9,
+                        ))
+
+                        center_lat = df_st["lat"].mean()
+                        center_lng = df_st["lng"].mean()
+
+                        deck = pdk.Deck(
+                            layers=layers,
+                            initial_view_state=pdk.ViewState(
+                                latitude=center_lat,
+                                longitude=center_lng,
+                                zoom=13,
+                                pitch=0,
+                            ),
+                            tooltip={
+                                "html": "<b>{station_name}</b><br/>"
+                                        "Capacity: <b>{capacity_tier}</b><br/>"
+                                        "Docks: <b>{total_docks}</b>",
+                                "style": {
+                                    "backgroundColor": "#1e293b",
+                                    "color":           "#e2e8f0",
+                                    "fontSize":        "12px",
+                                    "borderRadius":    "8px",
+                                    "padding":         "8px",
+                                },
+                            },
+                            map_style="mapbox://styles/mapbox/dark-v10",
+                        )
+                        st.pydeck_chart(deck, use_container_width=True, height=400)
+
+                        n_large  = len(df_st[df_st["capacity_tier"] == "LARGE"])
+                        n_medium = len(df_st[df_st["capacity_tier"] == "MEDIUM"])
+                        n_small  = len(df_st[df_st["capacity_tier"] == "SMALL"])
+                        st.caption(
+                            f"**{stations_data.get('total_stations',0)}** stations · "
+                            f"🟢 {n_large} large · "
+                            f"🔵 {n_medium} medium · "
+                            f"🟡 {n_small} small · "
+                            f"**{stations_data.get('total_docks',0)}** total docks"
+                        )
+                    else:
+                        st.info("No station data available.")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="section-title">Station List — {hood_filter}</div>'
+                        f'<div class="section-subtitle">Sorted by dock capacity · largest first</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    if stations:
+                        TIER_COLORS_HEX = {
+                            "LARGE":  ("#1E8449", "#fff"),
+                            "MEDIUM": ("#60a5fa", "#fff"),
+                            "SMALL":  ("#F1C40F", "#000"),
+                        }
+                        max_docks = max(s["total_docks"] for s in stations) or 1
+
+                        html = '<div style="overflow-y:auto;max-height:420px;padding-right:4px;">'
+                        for s in sorted(stations, key=lambda x: x["total_docks"], reverse=True):
+                            bg, fg   = TIER_COLORS_HEX.get(s["capacity_tier"], ("#475569","#fff"))
+                            pct      = max(8, int(s["total_docks"] / max_docks * 100))
+                            name     = s["station_name"]
+                            short    = name if len(name) <= 40 else name[:38] + "…"
+
+                            html += (
+                                f'<div style="margin-bottom:8px;">'
+
+                                # Station name + tier pill
+                                f'<div style="display:flex;justify-content:space-between;'
+                                f'align-items:center;margin-bottom:3px;">'
+                                f'<span style="color:#e2e8f0;font-size:11px;" title="{name}">'
+                                f'{short}</span>'
+                                f'<span style="background:{bg};color:{fg};padding:1px 8px;'
+                                f'border-radius:999px;font-size:9px;font-weight:700;'
+                                f'white-space:nowrap;margin-left:6px;">'
+                                f'{s["capacity_tier"]}</span>'
+                                f'</div>'
+
+                                # Dock bar
+                                f'<div style="background:rgba(255,255,255,0.04);'
+                                f'border-radius:4px;height:16px;position:relative;overflow:hidden;">'
+                                f'<div style="position:absolute;left:0;top:0;height:100%;'
+                                f'width:{pct}%;background:{bg};opacity:0.6;"></div>'
+                                f'<div style="position:absolute;left:6px;top:50%;'
+                                f'transform:translateY(-50%);color:#fff;'
+                                f'font-size:9px;font-weight:700;">'
+                                f'{s["total_docks"]} docks</div>'
+                                f'</div>'
+
+                                f'</div>'
+                            )
+                        html += '</div>'
+                        st.markdown(html, unsafe_allow_html=True)
+                    else:
+                        st.info("No station data available.")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # Row 2: Capacity donut + stats
+                col3, col4 = st.columns(2, gap="medium")
+
+                with col3:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Station Capacity Mix</div>', unsafe_allow_html=True)
+                    if neighborhoods_data:
+                        large  = nbhd_bb.get("large_stations", 0) or 0
+                        medium = nbhd_bb.get("medium_stations", 0) or 0
+                        small  = nbhd_bb.get("small_stations", 0) or 0
+                        df_cap = pd.DataFrame([
+                            {"Tier": f"Large ({large})",  "Count": large},
+                            {"Tier": f"Medium ({medium})", "Count": medium},
+                            {"Tier": f"Small ({small})",   "Count": small},
+                        ])
+                        df_cap = df_cap[df_cap["Count"] > 0]
+                        total_cap = df_cap["Count"].sum()
+                        df_cap["Pct"] = (df_cap["Count"] / total_cap * 100).round(1)
+
+                        if not df_cap.empty:
+                            donut = alt.Chart(df_cap).mark_arc(
+                                innerRadius=55, outerRadius=95,
+                                stroke="#1a1a2e", strokeWidth=2,
+                            ).encode(
+                                theta=alt.Theta("Count:Q"),
+                                color=alt.Color("Tier:N",
+                                    scale=alt.Scale(
+                                        domain=df_cap["Tier"].tolist(),
+                                        range=["#1E8449","#60a5fa","#F1C40F"][:len(df_cap)]),
+                                    legend=alt.Legend(title=None, orient="bottom",
+                                                      direction="horizontal")),
+                                tooltip=[
+                                    alt.Tooltip("Tier:N",  title="Tier"),
+                                    alt.Tooltip("Count:Q", title="Stations"),
+                                    alt.Tooltip("Pct:Q",   title="%", format=".1f"),
+                                ],
+                            )
+                            labels = alt.Chart(df_cap).mark_text(
+                                radius=112, fontSize=11,
+                                fontWeight="bold", color="#e2e8f0",
+                            ).encode(
+                                theta=alt.Theta("Count:Q", stack=True),
+                                text=alt.Text("Pct:Q", format=".0f"),
+                            )
+                            st.altair_chart(
+                                alt.layer(donut, labels).properties(height=320),
+                                use_container_width=True,
+                            )
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col4:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Station Stats</div>', unsafe_allow_html=True)
+                    if neighborhoods_data:
+                        total_s   = nbhd_bb.get("total_stations", 0) or 0
+                        total_d   = nbhd_bb.get("total_docks", 0) or 0
+                        avg_d     = nbhd_bb.get("avg_docks_per_station", 0) or 0
+                        per_sqmi  = nbhd_bb.get("stations_per_sqmile", 0) or 0
+
+                        for label, val, sub in [
+                            ("Total Stations",        f'{total_s}',          "In this neighborhood"),
+                            ("Total Docks",           f'{total_d}',          "Bike capacity"),
+                            ("Avg Docks / Station",   f'{avg_d:.1f}',        "Station size average"),
+                            ("Stations / Sq Mile",    f'{per_sqmi:.2f}',     "Coverage density"),
+                            ("Large Stations",        f'{nbhd_bb.get("large_stations",0) or 0}',  "≥23 docks"),
+                            ("Medium Stations",       f'{nbhd_bb.get("medium_stations",0) or 0}', "15–22 docks"),
+                            ("Small Stations",        f'{nbhd_bb.get("small_stations",0) or 0}',  "<15 docks"),
+                        ]:
+                            st.markdown(
+                                f'<div style="display:flex;justify-content:space-between;'
+                                f'align-items:center;padding:6px 0;'
+                                f'border-bottom:1px solid rgba(255,255,255,0.06);">'
+                                f'<div>'
+                                f'<div style="color:#e2e8f0;font-size:12px;">{label}</div>'
+                                f'<div style="color:rgba(255,255,255,0.3);font-size:10px;">{sub}</div>'
+                                f'</div>'
+                                f'<span style="color:#34d399;font-size:14px;font-weight:700;">{val}</span>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
                     st.markdown('</div>', unsafe_allow_html=True)
 
         # ── Generic fallback ──────────────────────────────────────────────────
@@ -1812,7 +3174,13 @@ with tab_overview:
     # MODE 1: No neighborhood, no domain → Home Page
     # ══════════════════════════════════════════════════════════════════════════
     else:
-
+        render_metric_cards([
+            ("Neighborhoods",   "51",          "Boston · Cambridge · Suburbs"),
+            ("Safest",          safest_name,   f"Grade: {safest_list[0].get('grade', '—')} · Lowest crime rate" if safest_list else "—"),
+            ("Most Affordable", afford_name,   afford_sub),
+            ("Best Transit",    best_transit_name, transit_sub[:60] if transit_sub else "Excellent coverage"),
+            ("Crime Trend",     f"{safer_pct}% holding steady", f"📉 {n_dec} improving · ➡️ {n_stable} stable · 📈 {n_inc} rising"),
+        ])
         # Row 1: Map + Safety donut
         col_map, col_safe = st.columns([1.2, 1], gap="medium")
 
@@ -2309,7 +3677,7 @@ with tab_report:
             report = st.session_state["last_report"]
             nbhd = report.get("neighborhood", selected_report_hood)
 
-            if report.get("status") == "completed" and report.get("url"):
+            if report.get("status") == "completed":
                 st.markdown(
                     f'<div class="narrative-box">'
                     f'<div class="narrative-title">✅ Report ready — {nbhd}</div>'
@@ -2317,24 +3685,46 @@ with tab_report:
                     unsafe_allow_html=True,
                 )
 
-                # Download via FastAPI endpoint
-                download_url = f"{API_BASE_URL}{report['url']}"
-                try:
-                    pdf_resp = requests.get(download_url, timeout=30)
-                    if pdf_resp.status_code == 200:
-                        st.markdown('<div class="dl-btn">', unsafe_allow_html=True)
-                        st.download_button(
-                            "⬇️  Download PDF Report",
-                            data=pdf_resp.content,
-                            file_name=f"{nbhd.lower().replace(' ', '_')}_report.pdf",
-                            mime="application/pdf",
-                            use_container_width=True,
-                        )
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    else:
-                        st.error("PDF download failed. Try refreshing.")
-                except Exception as e:
-                    st.error(f"Download error: {e}")
+                # ── Try direct from disk first (survives FastAPI restarts) ──
+                cached_pdf_path = report.get("pdf_path")
+                pdf_data = None
+                file_name = f"{nbhd.lower().replace(' ', '_')}_report.pdf"
+
+                if cached_pdf_path and Path(cached_pdf_path).exists():
+                    with open(cached_pdf_path, "rb") as f:
+                        pdf_data = f.read()
+
+                else:
+                    # Fallback — try FastAPI download endpoint
+                    download_url = f"{API_BASE_URL}{report.get('url', '')}"
+                    try:
+                        pdf_resp = requests.get(download_url, timeout=30)
+                        if pdf_resp.status_code == 200:
+                            pdf_data = pdf_resp.content
+                        else:
+                            # Stale cache — clear it and ask user to regenerate
+                            st.warning(
+                                "⚠️ Cached report session expired — "
+                                "please click Generate Report again."
+                            )
+                            cache_key = f"report_cache_{nbhd.lower().replace(' ', '_')}"
+                            if cache_key in st.session_state:
+                                del st.session_state[cache_key]
+                            if "last_report" in st.session_state:
+                                del st.session_state["last_report"]
+                    except Exception as e:
+                        st.error(f"Download error: {e}")
+
+                if pdf_data:
+                    st.markdown('<div class="dl-btn">', unsafe_allow_html=True)
+                    st.download_button(
+                        "⬇️  Download PDF Report",
+                        data=pdf_data,
+                        file_name=file_name,
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+                    st.markdown('</div>', unsafe_allow_html=True)
 
         elif not generate:
             st.markdown(

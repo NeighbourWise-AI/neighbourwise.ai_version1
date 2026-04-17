@@ -416,6 +416,7 @@ def generate_cortex_narratives(data: dict, conn) -> dict:
     scores = ", ".join(
         f"{d}: {data.get(c, 'N/A')}" for d, c in DOMAIN_COLS.items()
     )
+
     exec_prompt = (
         f"Write a 3-paragraph executive summary for {name} in {city}, Massachusetts "
         f"as a neighborhood recommendation report. "
@@ -436,11 +437,57 @@ def generate_cortex_narratives(data: dict, conn) -> dict:
         f"Format as:\n1. [first point]\n2. [second point]\n"
         f"Do NOT write 'Paragraph 1'. Just use 1. and 2. Be direct and specific."
     )
-    return {
+
+    # ── Per-domain narrative prompts ──────────────────────────────────────────
+    domain_prompts = {
+        "Housing": (
+            f"Write 2 sentences about housing in {name}, {city}, Massachusetts. "
+            f"Housing score: {data.get('HOUSING_SCORE','N/A')}/100, "
+            f"grade: {data.get('HOUSING_GRADE','N/A')}. "
+            f"Cover affordability, property types, and what renters or buyers can expect. "
+            f"Be specific and factual. End with a complete sentence."
+        ),
+        "Grocery": (
+            f"Write 2 sentences about grocery and food access in {name}, {city}, Massachusetts. "
+            f"Grocery score: {data.get('GROCERY_SCORE','N/A')}/100, "
+            f"grade: {data.get('GROCERY_GRADE','N/A')}. "
+            f"Cover store availability, food desert risk, and daily convenience. "
+            f"Be specific and factual. End with a complete sentence."
+        ),
+        "Healthcare": (
+            f"Write 2 sentences about healthcare access in {name}, {city}, Massachusetts. "
+            f"Healthcare score: {data.get('HEALTHCARE_SCORE','N/A')}/100, "
+            f"grade: {data.get('HEALTHCARE_GRADE','N/A')}. "
+            f"Cover facility availability, hospitals, clinics, and access quality. "
+            f"Be specific and factual. End with a complete sentence."
+        ),
+        "Schools": (
+            f"Write 2 sentences about schools in {name}, {city}, Massachusetts. "
+            f"School score: {data.get('SCHOOL_SCORE','N/A')}/100, "
+            f"grade: {data.get('SCHOOL_GRADE','N/A')}. "
+            f"Cover public vs private options, school levels, and education quality. "
+            f"Be specific and factual. End with a complete sentence."
+        ),
+        "Bluebikes": (
+            f"Write 2 sentences about Bluebikes bikeshare in {name}, {city}, Massachusetts. "
+            f"Bluebikes score: {data.get('BIKESHARE_SCORE','N/A')}/100, "
+            f"grade: {data.get('BIKESHARE_GRADE','N/A')}. "
+            f"Cover station availability, dock capacity, and cycling convenience. "
+            f"Be specific and factual. End with a complete sentence."
+        ),
+    }
+
+    narratives = {
         "executive_summary": trim_to_last_sentence(cortex_complete(exec_prompt, conn)),
         "recommendation":    trim_to_last_sentence(cortex_complete(rec_prompt, conn)),
     }
 
+    # Generate missing domain narratives
+    for domain, prompt in domain_prompts.items():
+        print(f"[Report] Generating {domain} narrative...")
+        narratives[domain] = trim_to_last_sentence(cortex_complete(prompt, conn))
+
+    return narratives
 
 # ── Chart generation (STANDALONE MODE ONLY) ────────────────────────────────────
 # Only called when report_agent is run directly without precomputed charts.
@@ -748,29 +795,44 @@ def build_pdf(
         ))
         story.append(Paragraph(narr_text, BODY))
 
-    # ══ DOMAIN NARRATIVES ════════════════════════════════════════════════════
+# ══ DOMAIN NARRATIVES ════════════════════════════════════════════════════
     smart_break(3.5)
     section_header("Domain Analysis", C_SECONDARY)
 
-    narrative_map = {
+    # Domains with pre-existing DB descriptions
+    db_narrative_map = {
         "Safety":       "SAFETY_DESCRIPTION",
         "Transit":      "TRANSIT_DESCRIPTION",
         "Restaurants":  "RESTAURANT_DESCRIPTION",
         "Universities": "EDUCATION_DESCRIPTION",
     }
+    # Domains with Cortex-generated narratives
+    cortex_narrative_domains = [
+        "Housing", "Grocery", "Healthcare", "Schools", "Bluebikes"
+    ]
+
     any_narrative = False
-    for domain, col in narrative_map.items():
-        text = str(data.get(col) or "").strip()
-        if text:
-            dc    = DOMAIN_COLORS.get(domain, C_ACCENT)
-            block = [
-                Paragraph(
-                    f'<font color="{dc}">●</font>  <b>{domain}</b>', H2
-                ),
-                Paragraph(text, BODY),
-            ]
-            story.append(KeepTogether(block))
-            any_narrative = True
+    for domain in DOMAIN_ORDER:
+        dc   = DOMAIN_COLORS.get(domain, C_ACCENT)
+
+        # Get text — prefer DB description, fall back to Cortex-generated
+        if domain in db_narrative_map:
+            text = str(data.get(db_narrative_map[domain]) or "").strip()
+        else:
+            text = str(narratives.get(domain) or "").strip()
+
+        if not text:
+            continue
+
+        block = [
+            Paragraph(
+                f'<font color="{dc}">●</font>  <b>{domain}</b>', H2
+            ),
+            Paragraph(text, BODY),
+        ]
+        story.append(KeepTogether(block))
+        any_narrative = True
+
     sections_built["domain_narratives"] = any_narrative
 
     # ══ LIFESTYLE CONTEXT ════════════════════════════════════════════════════
@@ -897,6 +959,7 @@ def generate_report(
         "rag_narrative":   str,
         "narratives":      dict,
         "chart_paths":     dict,   ← generated by GraphicAgent
+        "image_paths":     list,   ← generated by GraphicAgent (DALL-E)
     }
 
     If precomputed is None or a key is missing → fetches/generates internally.
@@ -1011,8 +1074,20 @@ def generate_report(
                 data, neighbor_df, crime_df, forecast_df, neighborhood
             )
 
-        # Image paths — from router precomputed or empty in standalone mode
-        image_paths = pc.get("image_paths") or []
+        # ── DALL-E image paths ────────────────────────────────────────────────
+        # Use precomputed if provided by router, otherwise generate in standalone
+        image_paths = pc.get("image_paths")
+        if not image_paths:
+            print(f"\n[Report] Generating DALL-E neighborhood images...")
+            try:
+                from graphic_agent import generate_neighborhood_images
+                image_paths = generate_neighborhood_images(neighborhood)
+                # Filter to only paths that actually exist on disk
+                image_paths = [p for p in (image_paths or []) if p and Path(p).exists()]
+                print(f"[Report] DALL-E: {len(image_paths)}/4 images generated")
+            except Exception as e:
+                print(f"[Report] ⚠️  DALL-E image generation failed: {e} — continuing without images")
+                image_paths = []
 
         # Validate all chart paths exist
         for key, path in chart_paths.items():

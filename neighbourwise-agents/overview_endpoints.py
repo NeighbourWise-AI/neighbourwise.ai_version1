@@ -1318,3 +1318,330 @@ async def get_neighborhood_boundary(neighborhood: str):
         }
     finally:
         conn.close()
+
+@router.get("/safety/crime-history/{neighborhood}")
+async def get_crime_history(neighborhood: str):
+    """Monthly historical crime counts for a neighborhood from 2023 onwards."""
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        df = _run(f"""
+            SELECT
+                DATE_TRUNC('month', OCCURRED_ON_DATE) AS YEAR_MONTH,
+                COUNT(*) AS CRIME_COUNT
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_CRIME
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
+              AND VALID_LOCATION = TRUE
+              AND OCCURRED_ON_DATE IS NOT NULL
+              AND YEAR(OCCURRED_ON_DATE) >= 2023
+              AND DATE_TRUNC('month', OCCURRED_ON_DATE) < DATE_TRUNC('month', CURRENT_DATE())
+            GROUP BY 1
+            ORDER BY 1
+        """, conn)
+
+        return {
+            "neighborhood": _title(neighborhood),
+            "history": [
+                {
+                    "year_month":   str(r["YEAR_MONTH"])[:10],
+                    "crime_count":  _i(r["CRIME_COUNT"]),
+                }
+                for _, r in df.iterrows()
+            ]
+        }
+    finally:
+        conn.close()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRANSIT: Individual stops for single neighborhood map
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/transit/stops/{neighborhood}")
+async def get_transit_stops(neighborhood: str):
+    """Returns individual stop lat/lng + type for pydeck scatter map."""
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        df = _run(f"""
+            SELECT
+                STOP_NAME, LAT, LONG,
+                SERVES_HEAVY_RAIL, SERVES_LIGHT_RAIL,
+                SERVES_COMMUTER_RAIL, SERVES_BUS, SERVES_FERRY,
+                IS_WHEELCHAIR_ACCESSIBLE, TRANSIT_TIER,
+                ROUTE_COUNT, ROUTE_NAMES
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_MBTA_STOPS
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
+              AND LAT IS NOT NULL
+              AND LONG IS NOT NULL
+        """, conn)
+
+        if df.empty:
+            return {"neighborhood": _title(neighborhood), "stops": []}
+
+        def stop_type(r):
+            if r["SERVES_HEAVY_RAIL"] or r["SERVES_LIGHT_RAIL"]:
+                return "Rapid Transit"
+            elif r["SERVES_COMMUTER_RAIL"]:
+                return "Commuter Rail"
+            elif r["SERVES_FERRY"]:
+                return "Ferry"
+            else:
+                return "Bus"
+
+        stops = []
+        for _, r in df.iterrows():
+            stype = stop_type(r)
+            stops.append({
+                "stop_name":    _s(r, "STOP_NAME") or "—",
+                "lat":          float(r["LAT"]),
+                "lng":          float(r["LONG"]),
+                "stop_type":    stype,
+                "accessible":   bool(r["IS_WHEELCHAIR_ACCESSIBLE"]),
+                "route_count":  _i(r["ROUTE_COUNT"]) or 0,
+                "route_names":  _s(r, "ROUTE_NAMES") or "—",
+            })
+
+        return {
+            "neighborhood": _title(neighborhood),
+            "total_stops":  len(stops),
+            "stops":        stops,
+        }
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRANSIT: Routes for single neighborhood
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/transit/routes/{neighborhood}")
+async def get_transit_routes(neighborhood: str):
+    """Returns all routes serving a neighborhood with type and stop count."""
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        df = _run(f"""
+            SELECT
+                ROUTE_NAME, ROUTE_TYPE, ROUTE_TIER,
+                STOP_COUNT_IN_NEIGHBORHOOD,
+                IS_ACCESSIBLE
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_TRANSIT_ROUTES_BY_NEIGHBORHOOD
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
+            ORDER BY
+                CASE ROUTE_TYPE
+                    WHEN 'Heavy Rail'    THEN 1
+                    WHEN 'Light Rail'    THEN 2
+                    WHEN 'Commuter Rail' THEN 3
+                    WHEN 'Ferry'         THEN 4
+                    ELSE 5
+                END,
+                STOP_COUNT_IN_NEIGHBORHOOD DESC
+        """, conn)
+
+        if df.empty:
+            return {"neighborhood": _title(neighborhood), "routes": []}
+
+        return {
+            "neighborhood": _title(neighborhood),
+            "total_routes": len(df),
+            "routes": [
+                {
+                    "route_name":  _s(r, "ROUTE_NAME") or "—",
+                    "route_type":  _s(r, "ROUTE_TYPE") or "Bus",
+                    "route_tier":  _s(r, "ROUTE_TIER") or "—",
+                    "stop_count":  _i(r["STOP_COUNT_IN_NEIGHBORHOOD"]) or 0,
+                    "accessible":  bool(r["IS_ACCESSIBLE"]),
+                }
+                for _, r in df.iterrows()
+            ]
+        }
+    finally:
+        conn.close()
+
+@router.get("/transit/route-lines/{neighborhood}")
+async def get_route_lines(neighborhood: str):
+    """
+    Connects only the stops within the neighborhood in sequence order,
+    grouped by route. No full city-wide paths.
+    """
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        df = _run(f"""
+            SELECT
+                m.ROUTE_NAME,
+                m.ROUTE_TYPE,
+                m.STOP_SEQUENCE,
+                s.LAT,
+                s.LONG
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_MBTA_STOPS s
+            JOIN NEIGHBOURWISE_DOMAINS.INTERMEDIATE.INT_BOSTON_MBTA_MAPPING m
+                ON s.STOP_ID = m.STOP_ID
+                AND s.ROUTE_NAMES LIKE '%' || m.ROUTE_NAME || '%'
+            WHERE UPPER(s.NEIGHBORHOOD_NAME) = '{safe}'
+              AND m.DIRECTION_ID = 0
+              AND s.LAT IS NOT NULL
+              AND s.LONG IS NOT NULL
+            ORDER BY m.ROUTE_NAME, m.STOP_SEQUENCE
+        """, conn)
+
+        if df.empty:
+            return {"neighborhood": _title(neighborhood), "lines": []}
+
+        ROUTE_LINE_COLORS = {
+            "Heavy Rail (Subway)": [239, 68,  68,  220],
+            "Light Rail":          [34,  197, 94,  220],
+            "Commuter Rail":       [167, 139, 250, 220],
+            "Bus":                 [148, 163, 184, 180],
+            "Ferry":               [52,  211, 153, 220],
+        }
+
+        lines = []
+        for route_name, group in df.groupby("ROUTE_NAME"):
+            group = group.sort_values("STOP_SEQUENCE")
+            rtype = group["ROUTE_TYPE"].iloc[0]
+            color = ROUTE_LINE_COLORS.get(rtype, [148, 163, 184, 180])
+            path  = [
+                [float(r["LONG"]), float(r["LAT"])]
+                for _, r in group.iterrows()
+                if pd.notna(r["LAT"]) and pd.notna(r["LONG"])
+            ]
+            if len(path) >= 2:
+                lines.append({
+                    "route_name": route_name,
+                    "route_type": rtype,
+                    "color":      color,
+                    "path":       path,
+                    "width":      4 if rtype in ("Heavy Rail (Subway)", "Light Rail", "Commuter Rail") else 2,
+                })
+
+        return {
+            "neighborhood": _title(neighborhood),
+            "total_lines":  len(lines),
+            "lines":        lines,
+        }
+    finally:
+        conn.close()
+
+@router.get("/transit/stop-sequence/{neighborhood}")
+async def get_stop_sequence(neighborhood: str):
+    """
+    Returns ordered stop names per route within the neighborhood.
+    """
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        df = _run(f"""
+            SELECT
+                m.ROUTE_NAME,
+                m.ROUTE_TYPE,
+                m.STOP_SEQUENCE,
+                m.STOP_NAME,
+                s.IS_WHEELCHAIR_ACCESSIBLE
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_MBTA_STOPS s
+            JOIN NEIGHBOURWISE_DOMAINS.INTERMEDIATE.INT_BOSTON_MBTA_MAPPING m
+                ON s.STOP_ID = m.STOP_ID
+            WHERE UPPER(s.NEIGHBORHOOD_NAME) = '{safe}'
+              AND m.DIRECTION_ID = 0
+            ORDER BY m.ROUTE_NAME, m.STOP_SEQUENCE
+        """, conn)
+
+        if df.empty:
+            return {"neighborhood": _title(neighborhood), "routes": []}
+
+        routes = []
+        for route_name, group in df.groupby("ROUTE_NAME"):
+            group = group.sort_values("STOP_SEQUENCE")
+            rtype = group["ROUTE_TYPE"].iloc[0]
+            stops = [
+                {
+                    "stop_name":   _s(r, "STOP_NAME") or "—",
+                    "sequence":    _i(r["STOP_SEQUENCE"]),
+                    "accessible":  bool(r["IS_WHEELCHAIR_ACCESSIBLE"]),
+                }
+                for _, r in group.iterrows()
+            ]
+            routes.append({
+                "route_name": route_name,
+                "route_type": rtype,
+                "stops":      stops,
+            })
+
+        return {
+            "neighborhood": _title(neighborhood),
+            "routes":       routes,
+        }
+    finally:
+        conn.close()
+
+@router.get("/transit/bluebikes-stations/{neighborhood}")
+async def get_bluebikes_stations(neighborhood: str):
+    """Returns Bluebike stations for a neighborhood with capacity details."""
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        df = _run(f"""
+            SELECT
+                STATION_NAME, LAT, LONG,
+                TOTAL_DOCKS, CAPACITY_TIER
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_BLUEBIKE_STATIONS
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
+              AND HAS_VALID_LOCATION = TRUE
+              AND LAT != -999
+              AND LONG != -999
+            ORDER BY TOTAL_DOCKS DESC
+        """, conn)
+
+        if df.empty:
+            return {"neighborhood": _title(neighborhood), "stations": [], "total_stations": 0}
+
+        return {
+            "neighborhood":   _title(neighborhood),
+            "total_stations": len(df),
+            "total_docks":    int(df["TOTAL_DOCKS"].sum()),
+            "stations": [
+                {
+                    "station_name":  _s(r, "STATION_NAME") or "—",
+                    "lat":           float(r["LAT"]),
+                    "lng":           float(r["LONG"]),
+                    "total_docks":   _i(r["TOTAL_DOCKS"]) or 0,
+                    "capacity_tier": _s(r, "CAPACITY_TIER") or "MEDIUM",
+                }
+                for _, r in df.iterrows()
+            ]
+        }
+    finally:
+        conn.close()
+
+@router.get("/schools/list/{neighborhood}")
+async def get_schools_list(neighborhood: str):
+    """Returns individual schools for a neighborhood."""
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        df = _run(f"""
+            SELECT
+                SCHOOL_NAME, SCHOOL_TYPE_DESC,
+                IS_PUBLIC, NEIGHBORHOOD_NAME
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_SCHOOLS
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
+            ORDER BY IS_PUBLIC DESC, SCHOOL_NAME ASC
+        """, conn)
+
+        if df.empty:
+            return {"neighborhood": _title(neighborhood), "schools": []}
+
+        return {
+            "neighborhood": _title(neighborhood),
+            "total":        len(df),
+            "schools": [
+                {
+                    "name":        _s(r, "SCHOOL_NAME") or "—",
+                    "type":        _s(r, "SCHOOL_TYPE_DESC") or "—",
+                    "is_public":   bool(r["IS_PUBLIC"]) if pd.notna(r["IS_PUBLIC"]) else False,
+                }
+                for _, r in df.iterrows()
+            ]
+        }
+    finally:
+        conn.close()
