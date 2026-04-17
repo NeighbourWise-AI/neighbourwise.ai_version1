@@ -150,8 +150,12 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     border-radius: 10px !important; font-size: 12px !important;
     font-weight: 500 !important; padding: 8px 10px !important;
     white-space: normal !important; word-wrap: break-word !important;
-    height: auto !important; min-height: 50px !important;
+    height: 64px !important; min-height: 64px !important;
+    max-height: 64px !important;
     line-height: 1.4 !important; text-align: center !important;
+    display: flex !important; align-items: center !important;
+    justify-content: center !important;
+    overflow: hidden !important;
 }
 .ex-btn button:hover {
     border-color: #60a5fa !important; color: #e2e8f0 !important;
@@ -255,6 +259,14 @@ def api_post(path: str, payload: dict = None, timeout: int = 30) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 # CACHED DATA LOADERS
 # ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=3600)
+def load_universities_list(neighborhood: str):
+    return api_get(f"/overview/universities/list/{neighborhood}")
+
+@st.cache_data(ttl=3600)
+def load_schools_list(neighborhood: str):
+    return api_get(f"/overview/schools/list/{neighborhood}")
 
 @st.cache_data(ttl=3600)
 def load_bluebikes_stations(neighborhood: str):
@@ -2449,106 +2461,738 @@ with tab_overview:
             scores   = domain_data.get("scores", [])
             profiles = domain_data.get("access_profiles", [])
             hotspots = domain_data.get("hotspots", [])
-
-            col1, col2 = st.columns(2, gap="medium")
+            summary  = domain_data.get("summary", {})
+ 
+            # ── KPI Cards (bordered, not filled) ──
+            grade_dist = summary.get("grade_distribution", {})
+            avg_score  = summary.get("avg_score", 0)
+            excellent_n = grade_dist.get("EXCELLENT", 0)
+            limited_n   = grade_dist.get("LIMITED", 0) + grade_dist.get("NO_DATA", 0)
+            total_fac   = sum(s.get("total_facilities", 0) for s in scores) if scores else 0
+            total_hosp  = sum(s.get("hospitals", 0) for s in scores) if scores else 0
+            total_clinics = sum(s.get("clinics", 0) for s in scores) if scores else 0
+            n_clusters  = sum(h.get("healthcare_clusters", 0) for h in hotspots) if hotspots else 0
+ 
+            st.markdown(
+                f'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:20px;">'
+                f'<div style="border:1px solid #22c55e44;border-radius:12px;padding:14px 16px;">'
+                f'<div style="color:#22c55e;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;font-weight:600;">Avg Score</div>'
+                f'<div style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{avg_score}</div>'
+                f'<div style="color:rgba(255,255,255,0.35);font-size:10px;">out of 100</div></div>'
+                f'<div style="border:1px solid #60a5fa44;border-radius:12px;padding:14px 16px;">'
+                f'<div style="color:#60a5fa;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;font-weight:600;">Facilities</div>'
+                f'<div style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{total_fac:,}</div>'
+                f'<div style="color:rgba(255,255,255,0.35);font-size:10px;">{total_hosp} hospitals · {total_clinics} clinics</div></div>'
+                f'<div style="border:1px solid #f59e0b44;border-radius:12px;padding:14px 16px;">'
+                f'<div style="color:#f59e0b;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;font-weight:600;">Excellent</div>'
+                f'<div style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{excellent_n}</div>'
+                f'<div style="color:rgba(255,255,255,0.35);font-size:10px;">neighborhoods ≥ 75</div></div>'
+                f'<div style="border:1px solid #ef444444;border-radius:12px;padding:14px 16px;">'
+                f'<div style="color:#ef4444;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;font-weight:600;">Limited</div>'
+                f'<div style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{limited_n}</div>'
+                f'<div style="color:rgba(255,255,255,0.35);font-size:10px;">needs attention</div></div>'
+                f'<div style="border:1px solid #a855f744;border-radius:12px;padding:14px 16px;">'
+                f'<div style="color:#a855f7;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;font-weight:600;">DBSCAN Clusters</div>'
+                f'<div style="font-family:DM Serif Display,serif;font-size:1.8rem;color:#e2e8f0;">{n_clusters}</div>'
+                f'<div style="color:rgba(255,255,255,0.35);font-size:10px;">spatial hotspots (250m)</div></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+ 
+            # ══════════════════════════════════════════════════════════════
+            # ROW 1: Healthcare Score Lollipop + Choropleth Map
+            # ══════════════════════════════════════════════════════════════
+            col1, col2 = st.columns([1, 1.3], gap="medium")
             with col1:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Healthcare Scores</div>', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Healthcare Score Rankings</div>', unsafe_allow_html=True)
                 if scores:
-                    df_h = pd.DataFrame(scores[:20])
-                    bars = alt.Chart(df_h).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#f472b6",
-                    ).encode(
+                    df_h = pd.DataFrame(scores[:18])
+                    grade_colors = {"EXCELLENT":"#22c55e","GOOD":"#60a5fa","MODERATE":"#f59e0b","LIMITED":"#ef4444","NO_DATA":"#6b7280"}
+ 
+                    # Lollipop chart (line + point)
+                    base = alt.Chart(df_h).encode(
                         y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("healthcare_score:Q", scale=alt.Scale(domain=[0, 100]),
-                                axis=alt.Axis(title="Healthcare Score")),
+                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=150)),
+                    )
+                    lines = base.mark_rule(strokeWidth=2, opacity=0.6).encode(
+                        x=alt.X("healthcare_score:Q", scale=alt.Scale(domain=[0, 105]),
+                                axis=alt.Axis(title="Score")),
+                        color=alt.Color("healthcare_grade:N",
+                                        scale=alt.Scale(
+                                            domain=list(grade_colors.keys()),
+                                            range=list(grade_colors.values())),
+                                        legend=alt.Legend(title="Grade", orient="bottom")),
+                    )
+                    points = base.mark_circle(size=90, opacity=0.9).encode(
+                        x=alt.X("healthcare_score:Q"),
+                        color=alt.Color("healthcare_grade:N",
+                                        scale=alt.Scale(
+                                            domain=list(grade_colors.keys()),
+                                            range=list(grade_colors.values())),
+                                        legend=None),
                         tooltip=["neighborhood:N",
                                  alt.Tooltip("healthcare_score:Q", format=".1f"),
                                  "healthcare_grade:N",
                                  alt.Tooltip("total_facilities:Q", title="Facilities"),
                                  alt.Tooltip("hospitals:Q", title="Hospitals"),
-                                 alt.Tooltip("facilities_per_sqmile:Q", format=".2f", title="Fac/sqmi")],
+                                 alt.Tooltip("clinics:Q", title="Clinics")],
                     )
-                    st.altair_chart(bars.properties(height=480), use_container_width=True)
+                    st.altair_chart((lines + points).properties(height=500), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
-
+ 
             with col2:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Access Profile Scores</div>', unsafe_allow_html=True)
-                if profiles:
-                    df_p = pd.DataFrame(profiles[:15])
-                    df_melt = df_p[["neighborhood","density_score","diversity_score","core_care_score"]].melt(
-                        id_vars="neighborhood", var_name="Component", value_name="Score"
+                st.markdown('<div class="section-title">Healthcare Access Choropleth</div>', unsafe_allow_html=True)
+                st.caption("Clustered facility share (%) from DBSCAN · 250m haversine radius")
+                if hotspots:
+                    # Fetch map geometry via the /overview/map endpoint
+                    map_data = api_get("/overview/map")
+                    if map_data and "features" in map_data:
+                        import json as _json
+ 
+                        # Build lookup from hotspots
+                        hs_lookup = {}
+                        for h in hotspots:
+                            hs_lookup[h["neighborhood"].upper()] = h
+ 
+                        features = []
+                        for feat in map_data["features"]:
+                            props = feat.get("properties", {})
+                            nbhd_name = props.get("neighborhood", "").upper()
+                            hs = hs_lookup.get(nbhd_name, {})
+                            clustered_pct = hs.get("clustered_facility_share_pct", 0) or 0
+                            access_tier = hs.get("access_tier", "NO_ACCESS")
+ 
+                            tier_colors_map = {
+                                "HIGH_ACCESS": [34, 197, 94, 180],
+                                "GOOD_ACCESS": [96, 165, 250, 160],
+                                "MODERATE_ACCESS": [245, 158, 11, 150],
+                                "LIMITED_ACCESS": [239, 68, 68, 160],
+                                "NO_ACCESS": [107, 114, 128, 100],
+                            }
+ 
+                            features.append({
+                                "type": "Feature",
+                                "geometry": feat.get("geometry"),
+                                "properties": {
+                                    "NEIGHBORHOOD": props.get("neighborhood", ""),
+                                    "CLUSTERED_PCT": round(clustered_pct, 1),
+                                    "ACCESS_TIER": access_tier.replace("_", " ").title(),
+                                    "FACILITIES": hs.get("total_facilities", 0),
+                                    "HOSPITALS": hs.get("hospitals", 0),
+                                    "CLINICS": hs.get("clinics", 0),
+                                    "CLUSTERS": hs.get("healthcare_clusters", 0),
+                                    "fill_color": tier_colors_map.get(access_tier, [107, 114, 128, 100]),
+                                }
+                            })
+ 
+                        geojson = {"type": "FeatureCollection", "features": features}
+ 
+                        import pydeck as pdk
+                        poly_layer = pdk.Layer(
+                            "GeoJsonLayer", data=geojson,
+                            filled=True, stroked=True, pickable=True, auto_highlight=True,
+                            get_fill_color="properties.fill_color",
+                            get_line_color=[255, 255, 255, 80], line_width_min_pixels=1,
+                        )
+                        layers = [poly_layer]
+ 
+                        # Fetch facility points with DBSCAN cluster labels
+                        pts_data = api_get("/overview/healthcare/cluster-points")
+                        if pts_data and pts_data.get("points"):
+                            pts = pts_data["points"]
+                            for p in pts:
+                                if p["is_hospital"]:
+                                    p["fill_r"], p["fill_g"], p["fill_b"], p["fill_a"] = 239, 68, 68, 230
+                                    p["radius"] = 80
+                                elif not p["is_noise"]:
+                                    p["fill_r"], p["fill_g"], p["fill_b"], p["fill_a"] = 34, 197, 94, 210
+                                    p["radius"] = 50
+                                else:
+                                    p["fill_r"], p["fill_g"], p["fill_b"], p["fill_a"] = 148, 163, 184, 130
+                                    p["radius"] = 30
+                            pts_df = pd.DataFrame(pts)
+                            layers.append(
+                                pdk.Layer("ScatterplotLayer", data=pts_df,
+                                          get_position=["lng", "lat"], get_radius="radius",
+                                          get_fill_color=["fill_r", "fill_g", "fill_b", "fill_a"],
+                                          pickable=True, opacity=0.9)
+                            )
+ 
+                        view = pdk.ViewState(latitude=42.35, longitude=-71.06, zoom=11, pitch=0)
+                        deck = pdk.Deck(
+                            layers=layers, initial_view_state=view,
+                            tooltip={
+                                "html": "<b>{NEIGHBORHOOD}</b><br/>"
+                                        "Access: <b>{ACCESS_TIER}</b><br/>"
+                                        "Clustered: <b>{CLUSTERED_PCT}%</b><br/>"
+                                        "Facilities: {FACILITIES} · Hospitals: {HOSPITALS}<br/>"
+                                        "DBSCAN Clusters: {CLUSTERS}",
+                                "style": {"backgroundColor": "#1e293b", "color": "#e2e8f0",
+                                          "fontSize": "12px", "borderRadius": "8px", "padding": "10px"}
+                            },
+                            map_style="mapbox://styles/mapbox/dark-v11",
+                        )
+                        st.pydeck_chart(deck, use_container_width=True)
+ 
+            # ══════════════════════════════════════════════════════════════
+            # ROW 2: Access Tier Donut + Score vs Density Bubble Scatter
+            # ══════════════════════════════════════════════════════════════
+            col3, col4 = st.columns(2, gap="medium")
+            with col3:
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Access Tier Distribution</div>', unsafe_allow_html=True)
+                st.caption("Classified by DBSCAN clustering + facility count")
+                if hotspots:
+                    df_tier = pd.DataFrame(hotspots)
+                    tier_dist = df_tier.groupby("access_tier").size().reset_index(name="count")
+                    tier_order = ["HIGH_ACCESS","GOOD_ACCESS","MODERATE_ACCESS","LIMITED_ACCESS","NO_ACCESS"]
+                    tier_clrs = ["#22c55e","#60a5fa","#f59e0b","#ef4444","#6b7280"]
+ 
+                    donut = alt.Chart(tier_dist).mark_arc(
+                        innerRadius=55, outerRadius=120, cornerRadius=4
+                    ).encode(
+                        theta=alt.Theta("count:Q"),
+                        color=alt.Color("access_tier:N",
+                                        scale=alt.Scale(domain=tier_order, range=tier_clrs),
+                                        legend=alt.Legend(title=None, orient="bottom", columns=3)),
+                        tooltip=["access_tier:N", alt.Tooltip("count:Q", title="Neighborhoods")],
                     )
-                    grouped = alt.Chart(df_melt).mark_bar().encode(
-                        x=alt.X("Score:Q", axis=alt.Axis(title="Score")),
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
-                        color=alt.Color("Component:N",
-                                        scale=alt.Scale(
-                                            domain=["density_score","diversity_score","core_care_score"],
-                                            range=["#f472b6","#c084fc","#60a5fa"]),
-                                        legend=alt.Legend(title=None, orient="bottom")),
-                        tooltip=["neighborhood:N","Component:N",
-                                 alt.Tooltip("Score:Q", format=".1f")],
+                    text_layer = alt.Chart(tier_dist).mark_text(
+                        radius=140, size=13, fontWeight="bold"
+                    ).encode(
+                        theta=alt.Theta("count:Q", stack=True),
+                        text="count:Q",
+                        color=alt.value("#e2e8f0"),
                     )
-                    st.altair_chart(grouped.properties(height=480), use_container_width=True)
+                    st.altair_chart((donut + text_layer).properties(height=340), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
-
+ 
+            with col4:
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Score vs Facility Density</div>', unsafe_allow_html=True)
+                st.caption("Bubble size = total facilities · reveals density outliers")
+                if scores:
+                    df_sc = pd.DataFrame(scores)
+                    df_sc = df_sc[df_sc["healthcare_score"] > 0]
+                    grade_colors = {"EXCELLENT":"#22c55e","GOOD":"#60a5fa","MODERATE":"#f59e0b","LIMITED":"#ef4444"}
+                    scatter = alt.Chart(df_sc).mark_circle(
+                        opacity=0.75, stroke="#fff", strokeWidth=0.5
+                    ).encode(
+                        x=alt.X("facilities_per_sqmile:Q",
+                                axis=alt.Axis(title="Facilities / Sq Mile"),
+                                scale=alt.Scale(zero=False)),
+                        y=alt.Y("healthcare_score:Q",
+                                axis=alt.Axis(title="Healthcare Score"),
+                                scale=alt.Scale(domain=[0, 105])),
+                        size=alt.Size("total_facilities:Q",
+                                      scale=alt.Scale(range=[30, 500]),
+                                      legend=None),
+                        color=alt.Color("healthcare_grade:N",
+                                        scale=alt.Scale(
+                                            domain=list(grade_colors.keys()),
+                                            range=list(grade_colors.values())),
+                                        legend=alt.Legend(title="Grade", orient="bottom")),
+                        tooltip=["neighborhood:N",
+                                 alt.Tooltip("healthcare_score:Q", format=".1f"),
+                                 alt.Tooltip("facilities_per_sqmile:Q", format=".2f"),
+                                 alt.Tooltip("total_facilities:Q", title="Facilities"),
+                                 alt.Tooltip("hospitals:Q", title="Hospitals"),
+                                 "healthcare_grade:N"],
+                    )
+                    st.altair_chart(scatter.properties(height=340), use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+ 
+            # ══════════════════════════════════════════════════════════════
+            # ROW 3: Score Components Heatmap + Facility Type Breakdown
+            # ══════════════════════════════════════════════════════════════
+            col5, col6 = st.columns(2, gap="medium")
+            with col5:
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Score Component Heatmap</div>', unsafe_allow_html=True)
+                st.caption("Density (35) · Core Care (30) · Contact (20) · Diversity (15)")
+                if profiles:
+                    df_comp = pd.DataFrame(profiles[:15])
+                    comp_cols = ["density_score","core_care_score","contact_quality_score","diversity_score"]
+                    available = [c for c in comp_cols if c in df_comp.columns]
+                    if available:
+                        df_hm = df_comp[["neighborhood"] + available].melt(
+                            id_vars="neighborhood", var_name="Component", value_name="Score"
+                        )
+                        rename = {"density_score":"Density","core_care_score":"Core Care",
+                                  "contact_quality_score":"Contact","diversity_score":"Diversity"}
+                        df_hm["Component"] = df_hm["Component"].map(rename)
+ 
+                        heatmap = alt.Chart(df_hm).mark_rect(cornerRadius=3).encode(
+                            x=alt.X("Component:N", axis=alt.Axis(title=None, orient="top",
+                                    labelAngle=0, labelFontSize=11)),
+                            y=alt.Y("neighborhood:N", sort=None,
+                                    axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
+                            color=alt.Color("Score:Q",
+                                            scale=alt.Scale(scheme="viridis", domain=[0, 35]),
+                                            legend=alt.Legend(title="Score", orient="right")),
+                            tooltip=["neighborhood:N", "Component:N",
+                                     alt.Tooltip("Score:Q", format=".1f")],
+                        )
+                        st.altair_chart(heatmap.properties(height=420, width="container"), use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+ 
+            with col6:
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.markdown('<div class="section-title">Facility Type Mix</div>', unsafe_allow_html=True)
+                st.caption("Inpatient · Outpatient · Public Health · Specialty per neighborhood")
+                if profiles:
+                    df_ft = pd.DataFrame(profiles[:12])
+                    type_cols = ["inpatient_hospitals","outpatient_clinics","public_health","specialty_other"]
+                    avail = [c for c in type_cols if c in df_ft.columns]
+                    if avail:
+                        df_ftm = df_ft[["neighborhood"] + avail].melt(
+                            id_vars="neighborhood", var_name="Type", value_name="Count"
+                        )
+                        rn = {"inpatient_hospitals":"Inpatient","outpatient_clinics":"Outpatient",
+                              "public_health":"Public Health","specialty_other":"Specialty"}
+                        df_ftm["Type"] = df_ftm["Type"].map(rn)
+ 
+                        # Normalized stacked bar (percentage)
+                        totals = df_ftm.groupby("neighborhood")["Count"].transform("sum")
+                        df_ftm["Pct"] = (df_ftm["Count"] / totals.replace(0, 1) * 100).round(1)
+ 
+                        stacked = alt.Chart(df_ftm).mark_bar(cornerRadius=2).encode(
+                            x=alt.X("Pct:Q", stack="normalize",
+                                    axis=alt.Axis(title="Facility Mix (%)", format=".0%")),
+                            y=alt.Y("neighborhood:N", sort=None,
+                                    axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
+                            color=alt.Color("Type:N",
+                                            scale=alt.Scale(
+                                                range=["#f472b6","#60a5fa","#22c55e","#c084fc"]),
+                                            legend=alt.Legend(title=None, orient="bottom")),
+                            tooltip=["neighborhood:N", "Type:N",
+                                     alt.Tooltip("Count:Q"), alt.Tooltip("Pct:Q", format=".1f", title="%")],
+                        )
+                        st.altair_chart(stacked.properties(height=420), use_container_width=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+                
         # ── SCHOOLS ───────────────────────────────────────────────────────────
         elif domain_filter == "Schools":
             neighborhoods_data = domain_data.get("neighborhoods", [])
-            summary = domain_data.get("summary", {})
+            summary            = domain_data.get("summary", {})
 
-            st.markdown(
-                f'<div class="narrative-box">'
-                f'Total schools citywide: <b>{summary.get("total_schools_citywide", "—")}</b>'
-                f'</div>', unsafe_allow_html=True,
-            )
-            col1, col2 = st.columns(2, gap="medium")
-            with col1:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">School Scores</div>', unsafe_allow_html=True)
-                if neighborhoods_data:
-                    df_s = pd.DataFrame(neighborhoods_data[:20])
-                    bars = alt.Chart(df_s).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#a78bfa",
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("school_score:Q", scale=alt.Scale(domain=[0, 100]),
-                                axis=alt.Axis(title="School Score")),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("school_score:Q", format=".1f"),
-                                 "school_grade:N",
-                                 alt.Tooltip("total_schools:Q", title="Total Schools"),
-                                 alt.Tooltip("level_coverage_score:Q", format=".1f", title="Level Coverage")],
-                    )
-                    st.altair_chart(bars.properties(height=480), use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+            # ── KPI cards ─────────────────────────────────────────────────────
+            if neighborhoods_data:
+                df_sc = pd.DataFrame(neighborhoods_data)
 
-            with col2:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">School Type Mix</div>', unsafe_allow_html=True)
-                if neighborhoods_data:
-                    df_s = pd.DataFrame(neighborhoods_data[:15])
-                    df_melt = df_s[["neighborhood","public","private","charter"]].melt(
-                        id_vars="neighborhood", var_name="Type", value_name="Count"
+                if not hood_filter:
+                    total_schools  = int(df_sc["total_schools"].sum())
+                    n_with         = int((df_sc["total_schools"] > 0).sum())
+                    avg_score      = round(df_sc["school_score"].mean(), 1)
+                    top_row        = df_sc.loc[df_sc["total_schools"].idxmax()]
+                    n_excellent    = int((df_sc["school_grade"] == "EXCELLENT").sum())
+                    render_metric_cards([
+                        ("Total Schools Citywide",     f'{total_schools:,}',    "Across all neighborhoods"),
+                        ("Neighborhoods With Schools", f'{n_with}',             f'of {len(df_sc)} neighborhoods'),
+                        ("Avg School Score",           f'{avg_score}',          "Across all neighborhoods"),
+                        ("Most Schools",               top_row["neighborhood"], f'{int(top_row["total_schools"])} schools'),
+                        ("Excellent Rated",            f'{n_excellent}',        "Neighborhoods"),
+                    ])
+                else:
+                    nbhd_sc = df_sc.iloc[0] if not df_sc.empty else {}
+                    all_sc_data = load_domain("schools")
+                    all_sc      = all_sc_data.get("neighborhoods", [])
+                    if all_sc:
+                        df_all_sc = pd.DataFrame(all_sc).sort_values(
+                            "school_score", ascending=False
+                        ).reset_index(drop=True)
+                        rank_row    = df_all_sc[df_all_sc["neighborhood"].str.upper() == hood_filter.upper()]
+                        sc_rank     = int(rank_row.index[0]) + 1 if not rank_row.empty else "—"
+                        total_nbhds = len(df_all_sc)
+                    else:
+                        sc_rank, total_nbhds = "—", "—"
+
+                    lc = nbhd_sc.get("level_coverage_score", 0) or 0
+                    render_metric_cards([
+                        ("School Score",   f'{nbhd_sc.get("school_score","—")}',  nbhd_sc.get("school_grade","—")),
+                        ("School Rank",    f'#{sc_rank}',                          f'of {total_nbhds} neighborhoods'),
+                        ("Total Schools",  f'{nbhd_sc.get("total_schools","—")}', "In this neighborhood"),
+                        ("Public Schools", f'{nbhd_sc.get("public","—")}',         f'of {nbhd_sc.get("total_schools","—")} total'),
+                        ("Level Coverage", f'{lc:.1f}',                            "Elem · Middle · High score"),
+                    ])
+
+            # ══ CITY-WIDE VIEW ════════════════════════════════════════════════
+            if not hood_filter:
+
+                # Row 1: Map + Bubble chart
+                col1, col2 = st.columns(2, gap="medium")
+
+                with col1:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="section-title">School Score Map</div>'
+                        '<div class="section-subtitle">Green = excellent · Red = limited</div>',
+                        unsafe_allow_html=True,
                     )
-                    stacked = alt.Chart(df_melt).mark_bar().encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
-                        x=alt.X("Count:Q", axis=alt.Axis(title="School Count")),
+                    map_data = load_map()
+                    features = map_data.get("features", [])
+                    if features and neighborhoods_data:
+                        import pydeck as pdk
+                        SCHOOL_FILL = {
+                            "EXCELLENT": [30,  132, 73,  200],
+                            "GOOD":      [130, 224, 170, 180],
+                            "MODERATE":  [241, 196, 15,  180],
+                            "LIMITED":   [192, 57,  43,  200],
+                        }
+                        sc_lookup = {r["neighborhood"].upper(): r for r in neighborhoods_data}
+                        sc_features = []
+                        for f in features:
+                            nbhd   = f["properties"]["neighborhood"].upper()
+                            sc_row = sc_lookup.get(nbhd)
+                            if not sc_row:
+                                continue
+                            grade = str(sc_row.get("school_grade", "MODERATE")).upper()
+                            f["properties"]["school_score"]  = sc_row.get("school_score", 0)
+                            f["properties"]["school_grade"]  = grade
+                            f["properties"]["total_schools"] = sc_row.get("total_schools", 0)
+                            f["properties"]["public"]        = sc_row.get("public", 0)
+                            f["properties"]["private"]       = sc_row.get("private", 0)
+                            f["properties"]["charter"]       = sc_row.get("charter", 0)
+                            f["properties"]["fill_color"]    = SCHOOL_FILL.get(grade, [100, 100, 100, 140])
+                            sc_features.append(f)
+
+                        layer = pdk.Layer(
+                            "GeoJsonLayer",
+                            data={"type": "FeatureCollection", "features": sc_features},
+                            filled=True, stroked=True, pickable=True, auto_highlight=True,
+                            get_fill_color="properties.fill_color",
+                            get_line_color=[255, 255, 255, 60],
+                            line_width_min_pixels=1,
+                        )
+                        deck = pdk.Deck(
+                            layers=[layer],
+                            initial_view_state=pdk.ViewState(
+                                latitude=42.35, longitude=-71.08, zoom=10.2, pitch=0
+                            ),
+                            tooltip={
+                                "html": "<b>{neighborhood}</b><br/>"
+                                        "Score: <b>{school_score}</b>/100 · <b>{school_grade}</b><br/>"
+                                        "Total: <b>{total_schools}</b> · "
+                                        "Public: {public} · Private: {private} · Charter: {charter}",
+                                "style": {"backgroundColor":"#1e293b","color":"#e2e8f0",
+                                          "fontSize":"12px","borderRadius":"8px","padding":"8px"},
+                            },
+                            map_style="mapbox://styles/mapbox/dark-v10",
+                        )
+                        st.pydeck_chart(deck, use_container_width=True, height=440)
+                        l1, l2, l3, l4 = st.columns(4)
+                        l1.markdown('<span style="color:#1E8449;">■</span> **Excellent**', unsafe_allow_html=True)
+                        l2.markdown('<span style="color:#82E0AA;">■</span> **Good**',      unsafe_allow_html=True)
+                        l3.markdown('<span style="color:#F1C40F;">■</span> **Moderate**',  unsafe_allow_html=True)
+                        l4.markdown('<span style="color:#C0392B;">■</span> **Limited**',   unsafe_allow_html=True)
+                    else:
+                        st.info("Map data not available.")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="section-title">School Ecosystem Heatmap</div>'
+                        '<div class="section-subtitle">Each cell = number of schools · darker = more · sorted by total schools</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if neighborhoods_data:
+                        df_sc = pd.DataFrame(neighborhoods_data).drop_duplicates("neighborhood")
+                        df_sc = df_sc[df_sc["total_schools"] > 0].sort_values(
+                            "total_schools", ascending=False
+                        ).head(25)
+
+                        # Build long-form for heatmap
+                        heatmap_rows = []
+                        for _, r in df_sc.iterrows():
+                            for col_name, label in [
+                                ("public",      "Public"),
+                                ("private",     "Private"),
+                                ("charter",     "Charter"),
+                                ("elementary",  "Elementary"),
+                                ("middle",      "Middle"),
+                                ("high_school", "High School"),
+                            ]:
+                                heatmap_rows.append({
+                                    "neighborhood": r["neighborhood"],
+                                    "Category":     label,
+                                    "Count":        int(r.get(col_name) or 0),
+                                    "total":        int(r.get("total_schools") or 0),
+                                })
+
+                        df_heat = pd.DataFrame(heatmap_rows)
+
+                        cat_order = ["Public","Private","Charter","Elementary","Middle","High School"]
+
+                        heatmap = alt.Chart(df_heat).mark_rect(
+                            stroke="#1a1a2e", strokeWidth=1,
+                        ).encode(
+                            x=alt.X("Category:N",
+                                    sort=cat_order,
+                                    axis=alt.Axis(
+                                        title=None, labelAngle=-30,
+                                        labelFontSize=11, labelFontWeight="bold",
+                                    )),
+                            y=alt.Y("neighborhood:N",
+                                    sort=alt.EncodingSortField("total", order="descending"),
+                                    axis=alt.Axis(title=None, labelFontSize=10, labelLimit=150)),
+                            color=alt.Color("Count:Q",
+                                            scale=alt.Scale(
+                                                domain=[0, df_heat["Count"].max()],
+                                                range=["#0f2a1a", "#1E8449"],
+                                            ),
+                                            legend=alt.Legend(title="Schools", orient="right")),
+                            tooltip=[
+                                alt.Tooltip("neighborhood:N", title="Neighborhood"),
+                                alt.Tooltip("Category:N",     title="Type"),
+                                alt.Tooltip("Count:Q",        title="Schools"),
+                            ],
+                        )
+
+                        text_heat = alt.Chart(df_heat).mark_text(
+                            fontSize=10, fontWeight="bold",
+                        ).encode(
+                            x=alt.X("Category:N", sort=cat_order),
+                            y=alt.Y("neighborhood:N",
+                                    sort=alt.EncodingSortField("total", order="descending")),
+                            text=alt.Text("Count:Q"),
+                            color=alt.condition(
+                                alt.datum.Count > df_heat["Count"].max() / 2,
+                                alt.value("#ffffff"),
+                                alt.value("#94a3b8"),
+                            ),
+                        )
+
+                        st.altair_chart(
+                            alt.layer(heatmap, text_heat).properties(height=520),
+                            use_container_width=True,
+                        )
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # Row 2: School type mix — horizontal grouped bars
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="section-title">Public · Private · Charter Mix — All Neighborhoods</div>'
+                    '<div class="section-subtitle">Sorted by total schools · shows school ecosystem per neighborhood</div>',
+                    unsafe_allow_html=True,
+                )
+                if neighborhoods_data:
+                    df_sc = pd.DataFrame(neighborhoods_data)
+                    df_sc = df_sc[df_sc["total_schools"] > 0].sort_values(
+                        "total_schools", ascending=False
+                    ).head(25)
+                    df_melt = df_sc[
+                        ["neighborhood","public","private","charter"]
+                    ].melt(id_vars="neighborhood", var_name="Type", value_name="Count")
+                    TYPE_LABELS = {"public":"Public","private":"Private","charter":"Charter"}
+                    df_melt["Type"] = df_melt["Type"].map(TYPE_LABELS)
+                    df_melt = df_melt[df_melt["Count"] > 0]
+
+                    stacked = alt.Chart(df_melt).mark_bar(cornerRadiusTopRight=3).encode(
+                        y=alt.Y("neighborhood:N",
+                                sort=alt.EncodingSortField("Count", order="descending"),
+                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=150)),
+                        x=alt.X("Count:Q", axis=alt.Axis(title="Number of Schools")),
                         color=alt.Color("Type:N",
                                         scale=alt.Scale(
-                                            domain=["public","private","charter"],
-                                            range=["#a78bfa","#60a5fa","#34d399"]),
-                                        legend=alt.Legend(title=None, orient="bottom")),
+                                            domain=["Public","Private","Charter"],
+                                            range=["#1E8449","#60a5fa","#f59e0b"]),
+                                        legend=alt.Legend(title=None, orient="bottom",
+                                                          direction="horizontal",
+                                                          labelFontSize=12)),
                         tooltip=["neighborhood:N","Type:N","Count:Q"],
                     )
-                    st.altair_chart(stacked.properties(height=480), use_container_width=True)
+                    text_sc = alt.Chart(df_melt).mark_text(
+                        align="left", dx=3, fontSize=9, color="#e2e8f0",
+                    ).encode(
+                        y=alt.Y("neighborhood:N",
+                                sort=alt.EncodingSortField("Count", order="descending")),
+                        x=alt.X("Count:Q", stack="zero"),
+                        detail="Type:N",
+                        text=alt.Text("Count:Q"),
+                    )
+                    st.altair_chart(
+                        alt.layer(stacked, text_sc).properties(height=600),
+                        use_container_width=True,
+                    )
                 st.markdown('</div>', unsafe_allow_html=True)
+
+            # ══ SINGLE NEIGHBORHOOD ═══════════════════════════════════════════
+            else:
+                nbhd_sc = neighborhoods_data[0] if neighborhoods_data else {}
+
+                # AI narrative box
+                desc = nbhd_sc.get("description")
+                if desc:
+                    st.markdown(
+                        f'<div class="narrative-box-blue">'
+                        f'<div class="narrative-title">{hood_filter} — Schools Summary</div>'
+                        f'{desc}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                col1, col2 = st.columns(2, gap="medium")
+
+                with col1:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="section-title">School Breakdown — {hood_filter}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if nbhd_sc:
+                        public  = nbhd_sc.get("public", 0) or 0
+                        private = nbhd_sc.get("private", 0) or 0
+                        charter = nbhd_sc.get("charter", 0) or 0
+
+                        # Bubble chart — one bubble per school type sized by count
+                        df_types = pd.DataFrame([
+                            {"Type": "Public",  "Count": public,  "Color": "#1E8449"},
+                            {"Type": "Private", "Count": private, "Color": "#60a5fa"},
+                            {"Type": "Charter", "Count": charter, "Color": "#f59e0b"},
+                        ])
+                        df_types = df_types[df_types["Count"] > 0]
+
+                        if not df_types.empty:
+                            bubble = alt.Chart(df_types).mark_circle().encode(
+                                x=alt.X("Type:N",
+                                        axis=alt.Axis(title=None, labelFontSize=13,
+                                                      labelFontWeight="bold")),
+                                y=alt.Y("Count:Q",
+                                        axis=alt.Axis(title="Number of Schools")),
+                                size=alt.Size("Count:Q",
+                                              scale=alt.Scale(range=[500, 4000]),
+                                              legend=None),
+                                color=alt.Color("Type:N",
+                                                scale=alt.Scale(
+                                                    domain=["Public","Private","Charter"],
+                                                    range=["#1E8449","#60a5fa","#f59e0b"]),
+                                                legend=None),
+                                tooltip=[
+                                    alt.Tooltip("Type:N",  title="Type"),
+                                    alt.Tooltip("Count:Q", title="Schools"),
+                                ],
+                            )
+                            count_labels = alt.Chart(df_types).mark_text(
+                                fontSize=20, fontWeight="bold", color="#e2e8f0",
+                            ).encode(
+                                x=alt.X("Type:N"),
+                                y=alt.Y("Count:Q"),
+                                text=alt.Text("Count:Q"),
+                            )
+                            st.altair_chart(
+                                alt.layer(bubble, count_labels).properties(height=280),
+                                use_container_width=True,
+                            )
+
+                        # Level presence
+                        st.markdown(
+                            '<div style="margin-top:10px;">'
+                            '<div style="color:rgba(255,255,255,0.4);font-size:10px;'
+                            'text-transform:uppercase;letter-spacing:0.08em;'
+                            'margin-bottom:8px;">School Levels</div>',
+                            unsafe_allow_html=True,
+                        )
+                        levels = [
+                            ("🏫 Elementary", nbhd_sc.get("elementary", 0) or 0, "#1E8449"),
+                            ("📚 Middle",      nbhd_sc.get("middle", 0) or 0,     "#60a5fa"),
+                            ("🎓 High School", nbhd_sc.get("high_school", 0) or 0,"#f59e0b"),
+                            ("🏛️ K-12",        nbhd_sc.get("k12", 0) or 0,        "#a78bfa"),
+                        ]
+                        for level_name, count, color in levels:
+                            has = count > 0
+                            st.markdown(
+                                f'<div style="display:flex;justify-content:space-between;'
+                                f'align-items:center;padding:6px 0;'
+                                f'border-bottom:1px solid rgba(255,255,255,0.06);">'
+                                f'<span style="color:{"#e2e8f0" if has else "rgba(255,255,255,0.3)"};'
+                                f'font-size:12px;">{"✅" if has else "❌"} {level_name}</span>'
+                                f'<span style="background:{color if has else "#374151"};'
+                                f'color:#fff;padding:2px 10px;border-radius:999px;'
+                                f'font-size:10px;font-weight:700;">'
+                                f'{count} school{"s" if count != 1 else ""}'
+                                f'</span></div>',
+                                unsafe_allow_html=True,
+                            )
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="section-title">Schools in {hood_filter}</div>'
+                        f'<div class="section-subtitle">Individual schools · grouped by type</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    with st.spinner("Loading schools..."):
+                        schools_data = load_schools_list(hood_filter)
+
+                    schools = schools_data.get("schools", [])
+
+                    if schools:
+                        TYPE_PILL = {
+                            True:  ("#1E8449", "🏫 Public"),
+                            False: ("#60a5fa", "🏛️ Private"),
+                        }
+                        LEVEL_KEYWORDS = {
+                            "elementary": "#1E8449",
+                            "elem":       "#1E8449",
+                            "middle":     "#60a5fa",
+                            "high":       "#f59e0b",
+                            "k-12":       "#a78bfa",
+                            "k12":        "#a78bfa",
+                        }
+
+                        html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;max-height:460px;overflow-y:auto;padding-right:4px;">'
+
+                        for s in schools:
+                            is_pub       = s["is_public"]
+                            pill_color, pill_label = TYPE_PILL.get(is_pub, ("#475569","🏫"))
+                            stype        = s["type"] or ""
+                            name         = s["name"]
+                            short        = name if len(name) <= 28 else name[:26] + "…"
+
+                            # Detect level from type string
+                            level_color = "#475569"
+                            for kw, lc in LEVEL_KEYWORDS.items():
+                                if kw in stype.lower():
+                                    level_color = lc
+                                    break
+
+                            html += (
+                                f'<div style="background:rgba(255,255,255,0.04);'
+                                f'border:1px solid rgba(255,255,255,0.08);'
+                                f'border-left:3px solid {level_color};'
+                                f'border-radius:8px;padding:8px 10px;">'
+
+                                # School name
+                                f'<div style="color:#e2e8f0;font-size:10.5px;'
+                                f'font-weight:600;line-height:1.3;margin-bottom:5px;" '
+                                f'title="{name}">{short}</div>'
+
+                                # Type pill + school type
+                                f'<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">'
+                                f'<span style="background:{pill_color};color:#fff;'
+                                f'padding:1px 6px;border-radius:999px;'
+                                f'font-size:8.5px;font-weight:700;">{pill_label}</span>'
+                                f'<span style="color:rgba(255,255,255,0.35);font-size:9px;">'
+                                f'{stype[:25] if stype else ""}</span>'
+                                f'</div>'
+
+                                f'</div>'
+                            )
+
+                        html += '</div>'
+                        st.markdown(html, unsafe_allow_html=True)
+                        st.caption(
+                            f"**{schools_data.get('total',0)}** schools · "
+                            f"green border = elementary · blue = middle · yellow = high · purple = K-12"
+                        )
+                    else:
+                        st.info("No individual school data available.")
+                    st.markdown('</div>', unsafe_allow_html=True)
 
         # ── RESTAURANTS ───────────────────────────────────────────────────────
         elif domain_filter == "Restaurants":
@@ -2609,52 +3253,429 @@ with tab_overview:
         # ── UNIVERSITIES ──────────────────────────────────────────────────────
         elif domain_filter == "Universities":
             neighborhoods_data = domain_data.get("neighborhoods", [])
-            summary = domain_data.get("summary", {})
+            summary            = domain_data.get("summary", {})
 
-            st.markdown(
-                f'<div class="narrative-box">'
-                f'{summary.get("neighborhoods_with_universities", 0)} neighborhoods have universities'
-                f'</div>', unsafe_allow_html=True,
-            )
+            # ── KPI cards ─────────────────────────────────────────────────────
             if neighborhoods_data:
-                df_u    = pd.DataFrame(neighborhoods_data)
-                df_with = df_u[df_u["total_universities"].fillna(0) > 0].copy()
+                df_u = pd.DataFrame(neighborhoods_data)
+
+                if not hood_filter:
+                    n_with      = int((df_u["total_universities"] > 0).sum())
+                    total_unis  = int(df_u["total_universities"].sum())
+                    avg_score   = round(df_u["education_score"].mean(), 1)
+                    top_row     = df_u.loc[df_u["total_universities"].idxmax()]
+                    n_research  = int(df_u["has_research_institutions"].sum()) if "has_research_institutions" in df_u else 0
+
+                    render_metric_cards([
+                        ("Total Universities",          f'{total_unis}',           "Across all neighborhoods"),
+                        ("Neighborhoods With Unis",     f'{n_with}',               f'of {len(df_u)} neighborhoods'),
+                        ("Avg Education Score",         f'{avg_score}',            "Across all neighborhoods"),
+                        ("Most Universities",           top_row["neighborhood"],   f'{int(top_row["total_universities"])} universities'),
+                        ("Research Institutions",       f'{n_research}',           "Neighborhoods with research"),
+                    ])
+                else:
+                    nbhd_u = df_u.iloc[0] if not df_u.empty else {}
+
+                    all_u_data  = load_domain("universities")
+                    all_u       = all_u_data.get("neighborhoods", [])
+                    if all_u:
+                        df_all_u = pd.DataFrame(all_u).sort_values(
+                            "education_score", ascending=False
+                        ).reset_index(drop=True)
+                        rank_row    = df_all_u[df_all_u["neighborhood"].str.upper() == hood_filter.upper()]
+                        u_rank      = int(rank_row.index[0]) + 1 if not rank_row.empty else "—"
+                        total_nbhds = len(df_all_u)
+                    else:
+                        u_rank, total_nbhds = "—", "—"
+
+                    render_metric_cards([
+                        ("Education Score",
+                         f'{nbhd_u.get("education_score","—")}',
+                         nbhd_u.get("education_grade","—")),
+
+                        ("Education Rank",
+                         f'#{u_rank}',
+                         f'of {total_nbhds} neighborhoods'),
+
+                        ("Total Universities",
+                         f'{nbhd_u.get("total_universities","—")}',
+                         "In this neighborhood"),
+
+                        ("With Student Housing",
+                         f'{nbhd_u.get("with_student_housing","—")}',
+                         "Universities with housing"),
+
+                        ("Doctorate Programs",
+                         f'{nbhd_u.get("doctorate_programs","—")}',
+                         "PhD-granting institutions"),
+                    ])
+
+            # ══ CITY-WIDE VIEW ════════════════════════════════════════════════
+            if not hood_filter:
+
                 col1, col2 = st.columns(2, gap="medium")
+
                 with col1:
                     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="section-title">Education Scores</div>', unsafe_allow_html=True)
-                    bars = alt.Chart(df_u.head(20)).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#818cf8",
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("education_score:Q", scale=alt.Scale(domain=[0, 100]),
-                                axis=alt.Axis(title="Education Score")),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("education_score:Q", format=".1f"),
-                                 "education_grade:N",
-                                 alt.Tooltip("total_universities:Q", title="Universities"),
-                                 "university_names:N"],
+                    st.markdown(
+                        '<div class="section-title">University Presence Map</div>'
+                        '<div class="section-subtitle">Green = excellent · Red = limited · Hover for details</div>',
+                        unsafe_allow_html=True,
                     )
-                    st.altair_chart(bars.properties(height=460), use_container_width=True)
+                    map_data = load_map()
+                    features = map_data.get("features", [])
+                    if features and neighborhoods_data:
+                        import pydeck as pdk
+                        UNI_FILL = {
+                            "EXCELLENT": [30,  132, 73,  200],
+                            "GOOD":      [130, 224, 170, 180],
+                            "MODERATE":  [241, 196, 15,  180],
+                            "LIMITED":   [192, 57,  43,  200],
+                        }
+                        u_lookup = {r["neighborhood"].upper(): r for r in neighborhoods_data}
+                        u_features = []
+                        for f in features:
+                            nbhd  = f["properties"]["neighborhood"].upper()
+                            u_row = u_lookup.get(nbhd)
+                            if not u_row:
+                                continue
+                            grade = str(u_row.get("education_grade", "LIMITED")).upper()
+                            f["properties"]["education_score"]    = u_row.get("education_score", 0)
+                            f["properties"]["education_grade"]    = grade
+                            f["properties"]["total_universities"] = u_row.get("total_universities", 0)
+                            f["properties"]["university_names"]   = u_row.get("university_names") or "None"
+                            f["properties"]["fill_color"]         = UNI_FILL.get(grade, [71, 85, 105, 140])
+                            u_features.append(f)
+
+                        layer = pdk.Layer(
+                            "GeoJsonLayer",
+                            data={"type": "FeatureCollection", "features": u_features},
+                            filled=True, stroked=True, pickable=True, auto_highlight=True,
+                            get_fill_color="properties.fill_color",
+                            get_line_color=[255, 255, 255, 60],
+                            line_width_min_pixels=1,
+                        )
+                        deck = pdk.Deck(
+                            layers=[layer],
+                            initial_view_state=pdk.ViewState(
+                                latitude=42.35, longitude=-71.08, zoom=10.2, pitch=0
+                            ),
+                            tooltip={
+                                "html": "<b>{neighborhood}</b><br/>"
+                                        "Score: <b>{education_score}</b>/100 · <b>{education_grade}</b><br/>"
+                                        "Universities: <b>{total_universities}</b><br/>"
+                                        "<span style='opacity:0.7;font-size:10px'>{university_names}</span>",
+                                "style": {"backgroundColor":"#1e293b","color":"#e2e8f0",
+                                          "fontSize":"12px","borderRadius":"8px","padding":"8px",
+                                          "maxWidth":"280px"},
+                            },
+                            map_style="mapbox://styles/mapbox/dark-v10",
+                        )
+                        st.pydeck_chart(deck, use_container_width=True, height=440)
+                        l1, l2, l3, l4 = st.columns(4)
+                        l1.markdown('<span style="color:#1E8449;">■</span> **Excellent**', unsafe_allow_html=True)
+                        l2.markdown('<span style="color:#82E0AA;">■</span> **Good**',      unsafe_allow_html=True)
+                        l3.markdown('<span style="color:#F1C40F;">■</span> **Moderate**',  unsafe_allow_html=True)
+                        l4.markdown('<span style="color:#C0392B;">■</span> **Limited**',   unsafe_allow_html=True)
+                    else:
+                        st.info("Map data not available.")
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 with col2:
                     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                    st.markdown('<div class="section-title">Neighborhoods With Universities</div>',
-                                unsafe_allow_html=True)
-                    if not df_with.empty:
-                        for _, row in df_with.iterrows():
-                            names = row.get("university_names") or "—"
-                            st.markdown(
-                                f'<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);">'
-                                f'<b style="color:#e2e8f0;">{row["neighborhood"]}</b> '
-                                f'<span style="color:rgba(255,255,255,0.4);font-size:11px;">'
-                                f'({int(row["total_universities"])} unis · score: {row["education_score"]:.0f})'
-                                f'</span><br>'
-                                f'<span style="color:rgba(255,255,255,0.55);font-size:11px;">{names}</span>'
-                                f'</div>', unsafe_allow_html=True,
+                    st.markdown(
+                        '<div class="section-title">University Ecosystem Heatmap</div>'
+                        '<div class="section-subtitle">Only neighborhoods with universities · darker = more</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if neighborhoods_data:
+                        df_u = pd.DataFrame(neighborhoods_data).drop_duplicates("neighborhood")
+                        df_u = df_u[df_u["total_universities"] > 0].sort_values(
+                            "total_universities", ascending=False
+                        )
+
+                        heatmap_rows = []
+                        for _, r in df_u.iterrows():
+                            for col_name, label in [
+                                ("total_universities",    "Total"),
+                                ("public",               "Public"),
+                                ("private",              "Private"),
+                                ("four_year_public",     "4yr Public"),
+                                ("four_year_private",    "4yr Private"),
+                                ("doctorate_programs",   "Doctorate"),
+                                ("with_student_housing", "w/ Housing"),
+                            ]:
+                                heatmap_rows.append({
+                                    "neighborhood": r["neighborhood"],
+                                    "Category":     label,
+                                    "Count":        int(r.get(col_name) or 0),
+                                    "total":        int(r.get("total_universities") or 0),
+                                })
+
+                        df_heat = pd.DataFrame(heatmap_rows)
+                        cat_order = ["Total","Public","Private","4yr Public","4yr Private","Doctorate","w/ Housing"]
+
+                        heatmap = alt.Chart(df_heat).mark_rect(
+                            stroke="#1a1a2e", strokeWidth=1,
+                        ).encode(
+                            x=alt.X("Category:N",
+                                    sort=cat_order,
+                                    axis=alt.Axis(title=None, labelAngle=-30,
+                                                  labelFontSize=11, labelFontWeight="bold")),
+                            y=alt.Y("neighborhood:N",
+                                    sort=alt.EncodingSortField("total", order="descending"),
+                                    axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
+                            color=alt.Color("Count:Q",
+                                            scale=alt.Scale(
+                                                domain=[0, df_heat["Count"].max()],
+                                                range=["#0f1a2e", "#6366F1"],
+                                            ),
+                                            legend=alt.Legend(title="Count", orient="right")),
+                            tooltip=[
+                                alt.Tooltip("neighborhood:N", title="Neighborhood"),
+                                alt.Tooltip("Category:N",     title="Category"),
+                                alt.Tooltip("Count:Q",        title="Count"),
+                            ],
+                        )
+                        text_heat = alt.Chart(df_heat).mark_text(
+                            fontSize=10, fontWeight="bold",
+                        ).encode(
+                            x=alt.X("Category:N", sort=cat_order),
+                            y=alt.Y("neighborhood:N",
+                                    sort=alt.EncodingSortField("total", order="descending")),
+                            text=alt.Text("Count:Q"),
+                            color=alt.condition(
+                                alt.datum.Count > df_heat["Count"].max() / 2,
+                                alt.value("#ffffff"),
+                                alt.value("#94a3b8"),
+                            ),
+                        )
+                        st.altair_chart(
+                            alt.layer(heatmap, text_heat).properties(height=420),
+                            use_container_width=True,
+                        )
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # Row 2: University directory — all neighborhoods with unis
+                st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="section-title">University Directory — All Neighborhoods</div>'
+                    '<div class="section-subtitle">Every university in Boston & Cambridge · grouped by neighborhood</div>',
+                    unsafe_allow_html=True,
+                )
+                if neighborhoods_data:
+                    df_u = pd.DataFrame(neighborhoods_data)
+                    df_with = df_u[df_u["total_universities"] > 0].sort_values(
+                        "total_universities", ascending=False
+                    )
+
+                    html = '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">'
+                    for _, row in df_with.iterrows():
+                        names = row.get("university_names") or "—"
+                        score = row.get("education_score", 0) or 0
+                        grade = str(row.get("education_grade","—")).upper()
+                        total = int(row.get("total_universities", 0) or 0)
+                        GRADE_C = {
+                            "EXCELLENT":"#1E8449","GOOD":"#82E0AA",
+                            "MODERATE":"#F1C40F","LIMITED":"#C0392B"
+                        }
+                        gc = GRADE_C.get(grade, "#475569")
+
+                        # Split university names into list
+                        uni_list = [u.strip() for u in names.split(",") if u.strip() and u.strip() != "—"]
+
+                        html += (
+                            f'<div style="background:rgba(255,255,255,0.04);'
+                            f'border:1px solid rgba(255,255,255,0.08);'
+                            f'border-top:3px solid {gc};'
+                            f'border-radius:10px;padding:10px 12px;">'
+
+                            # Header
+                            f'<div style="display:flex;justify-content:space-between;'
+                            f'align-items:center;margin-bottom:8px;">'
+                            f'<span style="color:#e2e8f0;font-size:12px;font-weight:700;">'
+                            f'{row["neighborhood"]}</span>'
+                            f'<span style="background:{gc};color:#fff;padding:1px 7px;'
+                            f'border-radius:999px;font-size:9px;font-weight:700;">'
+                            f'{total} uni{"s" if total != 1 else ""}</span>'
+                            f'</div>'
+                        )
+
+                        for uni in uni_list[:4]:
+                            short = uni if len(uni) <= 32 else uni[:30] + "…"
+                            html += (
+                                f'<div style="color:rgba(255,255,255,0.6);font-size:10px;'
+                                f'padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04);">'
+                                f'🎓 {short}</div>'
                             )
+                        if len(uni_list) > 4:
+                            html += (
+                                f'<div style="color:rgba(255,255,255,0.3);font-size:9px;'
+                                f'margin-top:3px;">+{len(uni_list)-4} more</div>'
+                            )
+
+                        html += '</div>'
+
+                    html += '</div>'
+                    st.markdown(html, unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # ══ SINGLE NEIGHBORHOOD ═══════════════════════════════════════════
+            else:
+                nbhd_u = neighborhoods_data[0] if neighborhoods_data else {}
+
+                # AI narrative
+                desc = nbhd_u.get("description")
+                if desc:
+                    st.markdown(
+                        f'<div class="narrative-box-blue">'
+                        f'<div class="narrative-title">{hood_filter} — Universities Summary</div>'
+                        f'{desc}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                col1, col2 = st.columns(2, gap="medium")
+
+                with col1:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="section-title">University Breakdown — {hood_filter}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if nbhd_u:
+                        # Feature flags
+                        flags = [
+                            ("🏛️ Has Universities",         nbhd_u.get("has_universities", False)),
+                            ("🔬 Research Institutions",    nbhd_u.get("has_research_institutions", False)),
+                            ("🏠 Student Housing",          nbhd_u.get("has_student_housing", False)),
+                        ]
+                        for label, val in flags:
+                            color = "#1E8449" if val else "#374151"
+                            icon  = "✅" if val else "❌"
+                            st.markdown(
+                                f'<div style="display:flex;justify-content:space-between;'
+                                f'align-items:center;padding:6px 0;'
+                                f'border-bottom:1px solid rgba(255,255,255,0.06);">'
+                                f'<span style="color:#e2e8f0;font-size:12px;">{icon} {label}</span>'
+                                f'<span style="background:{color};color:#fff;padding:2px 8px;'
+                                f'border-radius:999px;font-size:10px;font-weight:700;">'
+                                f'{"Yes" if val else "No"}</span>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+                        # Stats
+                        stats = [
+                            ("Total Universities",   nbhd_u.get("total_universities", 0) or 0),
+                            ("Public",               nbhd_u.get("public", 0) or 0),
+                            ("Private",              nbhd_u.get("private", 0) or 0),
+                            ("4-Year Public",        nbhd_u.get("four_year_public", 0) or 0),
+                            ("4-Year Private",       nbhd_u.get("four_year_private", 0) or 0),
+                            ("Higher Ed Count",      nbhd_u.get("higher_education_count", 0) or 0),
+                            ("Doctorate Programs",   nbhd_u.get("doctorate_programs", 0) or 0),
+                            ("w/ Student Housing",   nbhd_u.get("with_student_housing", 0) or 0),
+                        ]
+                        max_val = max((v for _, v in stats), default=1) or 1
+
+                        for label, val in stats:
+                            pct = max(4, int(val / max_val * 100))
+                            st.markdown(
+                                f'<div style="margin-bottom:6px;">'
+                                f'<div style="display:flex;justify-content:space-between;'
+                                f'margin-bottom:3px;">'
+                                f'<span style="color:rgba(255,255,255,0.55);font-size:11px;">{label}</span>'
+                                f'<span style="color:#e2e8f0;font-size:11px;font-weight:700;">{val}</span>'
+                                f'</div>'
+                                f'<div style="background:rgba(255,255,255,0.06);border-radius:4px;height:6px;">'
+                                f'<div style="height:100%;width:{pct}%;'
+                                f'background:#6366F1;border-radius:4px;opacity:0.8;"></div>'
+                                f'</div></div>',
+                                unsafe_allow_html=True,
+                            )
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="section-title">Universities in {hood_filter}</div>'
+                        f'<div class="section-subtitle">Individual institutions</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    with st.spinner("Loading universities..."):
+                        unis_data = load_universities_list(hood_filter)
+
+                    unis = unis_data.get("universities", [])
+
+                    if unis:
+                        TYPE_COLORS = {
+                            "Public":              "#1E8449",
+                            "Private":             "#6366F1",
+                            "Community College":   "#f59e0b",
+                            "For-Profit":          "#ef4444",
+                        }
+
+                        html = '<div style="display:flex;flex-direction:column;gap:8px;max-height:460px;overflow-y:auto;padding-right:4px;">'
+                        for u in unis:
+                            utype  = u["type"] or "—"
+                            color  = "#475569"
+                            for k, c in TYPE_COLORS.items():
+                                if k.lower() in utype.lower():
+                                    color = c
+                                    break
+                            housing_badge = (
+                                '<span style="background:#1E8449;color:#fff;'
+                                'padding:1px 6px;border-radius:999px;'
+                                'font-size:8px;font-weight:700;margin-left:4px;">🏠 Housing</span>'
+                                if u["has_housing"] else ""
+                            )
+                            program = u["largest_program"] or ""
+                            short_prog = program[:35] + "…" if len(program) > 35 else program
+
+                            html += (
+                                f'<div style="background:rgba(255,255,255,0.04);'
+                                f'border:1px solid rgba(255,255,255,0.08);'
+                                f'border-left:4px solid {color};'
+                                f'border-radius:10px;padding:10px 12px;">'
+
+                                # Name + housing badge
+                                f'<div style="color:#e2e8f0;font-size:12px;font-weight:700;'
+                                f'margin-bottom:4px;">'
+                                f'🎓 {u["name"]}{housing_badge}</div>'
+
+                                # Type pill
+                                f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
+                                f'<span style="background:{color};color:#fff;padding:1px 8px;'
+                                f'border-radius:999px;font-size:9px;font-weight:700;">{utype}</span>'
+                            )
+                            if short_prog and short_prog != "—":
+                                html += (
+                                    f'<span style="color:rgba(255,255,255,0.4);font-size:10px;">'
+                                    f'Top: {short_prog}</span>'
+                                )
+                            html += '</div></div>'
+
+                        html += '</div>'
+                        st.markdown(html, unsafe_allow_html=True)
+                        st.caption(f"**{unis_data.get('total',0)}** universities in {hood_filter}")
+                    else:
+                        # No universities — show a message
+                        total_u = nbhd_u.get("total_universities", 0) if neighborhoods_data else 0
+                        if total_u == 0:
+                            st.markdown(
+                                f'<div style="text-align:center;padding:40px 20px;">'
+                                f'<div style="font-size:32px;margin-bottom:8px;">🎓</div>'
+                                f'<div style="color:#e2e8f0;font-size:14px;font-weight:600;">'
+                                f'No universities in {hood_filter}</div>'
+                                f'<div style="color:rgba(255,255,255,0.4);font-size:12px;margin-top:4px;">'
+                                f'This neighborhood does not have any university campuses.</div>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.info("Individual university data not available.")
                     st.markdown('</div>', unsafe_allow_html=True)
 
         # ── BLUEBIKES ─────────────────────────────────────────────────────────

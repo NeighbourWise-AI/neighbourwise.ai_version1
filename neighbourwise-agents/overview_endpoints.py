@@ -1645,3 +1645,37 @@ async def get_schools_list(neighborhood: str):
         }
     finally:
         conn.close()
+
+@router.get("/universities/list/{neighborhood}")
+async def get_universities_list(neighborhood: str):
+    """Returns individual universities for a neighborhood."""
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        df = _run(f"""
+            SELECT
+                COLLEGE_NAME, INSTITUTION_TYPE,
+                HAS_CAMPUS_HOUSING, LARGEST_PROGRAM
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_UNIVERSITIES
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
+            ORDER BY INSTITUTION_TYPE, COLLEGE_NAME
+        """, conn)
+
+        if df.empty:
+            return {"neighborhood": _title(neighborhood), "universities": []}
+
+        return {
+            "neighborhood": _title(neighborhood),
+            "total":        len(df),
+            "universities": [
+                {
+                    "name":            _s(r, "COLLEGE_NAME") or "—",
+                    "type":            _s(r, "INSTITUTION_TYPE") or "—",
+                    "has_housing":     bool(r["HAS_CAMPUS_HOUSING"]) if pd.notna(r["HAS_CAMPUS_HOUSING"]) else False,
+                    "largest_program": _s(r, "LARGEST_PROGRAM") or "—",
+                }
+                for _, r in df.iterrows()
+            ]
+        }
+    finally:
+        conn.close()

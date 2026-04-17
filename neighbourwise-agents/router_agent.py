@@ -78,6 +78,7 @@ _DOMAIN_KEYWORDS = {
         "safe", "safety", "crime", "violent", "theft", "assault",
         "police", "incident", "robbery", "shooting", "dangerous",
     ],
+
     "Housing": [
         "rent", "housing", "affordable", "afford", "price", "sqft",
         "property", "buy", "home", "apartment", "condo", "assessed",
@@ -133,6 +134,15 @@ _GRAPH_SIGNALS = [
     "similar to", "neighbors of", "borders", "which neighborhoods are like",
     "comparable to", "same mbta", "same line", "transit connected",
     "nearby neighborhoods", "adjacent to",
+]
+
+# Transit routing signals — always transit_route handler
+_TRANSIT_ROUTE_SIGNALS = [
+    "how do i get to", "how to get to", "how do i commute",
+    "commute to", "travel to", "get from", "route from",
+    "directions to", "how to reach", "how to travel",
+    "which line to take", "which train to take", "which bus to take",
+    "how long does it take to get to", "best way to get to",
 ]
 
 
@@ -193,6 +203,12 @@ def _keyword_classify(query: str) -> Optional[dict]:
         return {"intent": "graph_query", "neighborhood": nbhd,
                 "domain": None, "confidence": 0.95,
                 "reasoning": "graph relationship keyword detected"}
+
+        # ── 2b. Transit routing signals → always transit_route ────────────────────
+    if any(k in q for k in _TRANSIT_ROUTE_SIGNALS):
+        return {"intent": "transit_route", "neighborhood": nbhd,
+                "domain": "MBTA", "confidence": 0.95,
+                "reasoning": "transit routing query detected"}
 
     # ── 3. General livability signals → always graph_query ────────────────────
     if any(k in q for k in _LIVABILITY_SIGNALS):
@@ -683,6 +699,212 @@ def handle_data_query(query: str, conn, domain_filter: str = None) -> dict:
         "_sql_key":   f"sql_{abs(hash(query))}",
     }
 
+def handle_transit_route(query: str, conn) -> dict:
+    """
+    Handles commute/routing queries by finding shared MBTA routes
+    between origin and destination neighborhoods.
+    """
+    print(f"\n[TransitRoute] Processing: {query}")
+    t0 = time.time()
+
+    # ── Extract origin and destination ────────────────────────────────────────
+    # Try to extract two locations from the query
+    q_lower = query.lower()
+
+    # Known Boston destinations that aren't neighborhoods
+    DESTINATION_MAP = {
+        "boston college":       ("Brighton",   42.3358, -71.1684),
+        "boston university":    ("Fenway",      42.3505, -71.1054),
+        "northeastern":         ("Fenway",      42.3398, -71.0892),
+        "harvard":              ("Cambridge",   42.3744, -71.1182),
+        "mit":                  ("Cambridge",   42.3601, -71.0942),
+        "logan airport":        ("East Boston", 42.3656, -71.0096),
+        "south station":        ("Downtown",    42.3519, -71.0552),
+        "north station":        ("West End",    42.3660, -71.0622),
+        "back bay station":     ("Back Bay",    42.3479, -71.0770),
+        "fenway park":          ("Fenway",      42.3467, -71.0972),
+        "mass general":         ("West End",    42.3631, -71.0686),
+        "brigham":              ("Longwood",    42.3358, -71.1059),
+        "children's hospital":  ("Longwood",    42.3380, -71.1067),
+    }
+
+    origin_nbhd      = _extract_neighborhood_fast(query)
+    dest_nbhd        = None
+    dest_display     = None
+
+    # Check known destinations first
+    for dest_name, (nbhd, lat, lng) in DESTINATION_MAP.items():
+        if dest_name in q_lower:
+            dest_nbhd    = nbhd
+            dest_display = dest_name.title()
+            break
+
+    # If no known destination, try extracting a second neighborhood
+    if not dest_nbhd:
+        words = query.split()
+        for i, word in enumerate(words):
+            candidate = word.strip("?,.")
+            if candidate.lower() != (origin_nbhd or "").lower():
+                for n in _KNOWN_NEIGHBORHOODS:
+                    if n.lower() == candidate.lower():
+                        dest_nbhd    = n
+                        dest_display = n
+                        break
+            if dest_nbhd:
+                break
+
+    if not origin_nbhd or not dest_nbhd:
+        # Fall back to regular data query
+        return handle_data_query(query, conn)
+
+    dest_display = dest_display or dest_nbhd
+    print(f"[TransitRoute] From: {origin_nbhd} → To: {dest_display} ({dest_nbhd})")
+
+    try:
+        # ── Query 1: Routes serving origin ────────────────────────────────────
+        origin_upper = origin_nbhd.upper()
+        dest_upper   = dest_nbhd.upper()
+
+        df_origin = run_query(f"""
+            SELECT DISTINCT
+                m.ROUTE_NAME,
+                m.ROUTE_TYPE,
+                s.STOP_NAME,
+                m.STOP_SEQUENCE
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_MBTA_STOPS s
+            JOIN NEIGHBOURWISE_DOMAINS.INTERMEDIATE.INT_BOSTON_MBTA_MAPPING m
+                ON s.STOP_ID = m.STOP_ID
+            WHERE UPPER(s.NEIGHBORHOOD_NAME) = '{origin_upper}'
+              AND m.DIRECTION_ID = 0
+            ORDER BY m.ROUTE_NAME, m.STOP_SEQUENCE
+        """, conn)
+
+        # ── Query 2: Routes serving destination ───────────────────────────────
+        df_dest = run_query(f"""
+            SELECT DISTINCT
+                m.ROUTE_NAME,
+                m.ROUTE_TYPE,
+                s.STOP_NAME,
+                m.STOP_SEQUENCE
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_MBTA_STOPS s
+            JOIN NEIGHBOURWISE_DOMAINS.INTERMEDIATE.INT_BOSTON_MBTA_MAPPING m
+                ON s.STOP_ID = m.STOP_ID
+            WHERE UPPER(s.NEIGHBORHOOD_NAME) = '{dest_upper}'
+              AND m.DIRECTION_ID = 0
+            ORDER BY m.ROUTE_NAME, m.STOP_SEQUENCE
+        """, conn)
+
+        # ── Query 3: Bluebikes near destination ───────────────────────────────
+        df_bikes = run_query(f"""
+            SELECT STATION_NAME, TOTAL_DOCKS, CAPACITY_TIER
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_BLUEBIKE_STATIONS
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{dest_upper}'
+              AND HAS_VALID_LOCATION = TRUE
+            ORDER BY TOTAL_DOCKS DESC
+            LIMIT 3
+        """, conn)
+
+        if df_origin.empty or df_dest.empty:
+            return handle_data_query(query, conn)
+
+        # ── Find direct routes (serve both neighborhoods) ─────────────────────
+        origin_routes = set(df_origin["ROUTE_NAME"].unique())
+        dest_routes   = set(df_dest["ROUTE_NAME"].unique())
+        direct_routes = origin_routes & dest_routes
+
+        # ── Build context for synthesis ───────────────────────────────────────
+        context_parts = []
+
+        if direct_routes:
+            direct_details = []
+            for route in sorted(direct_routes):
+                # Get first stop in origin
+                o_stops = df_origin[df_origin["ROUTE_NAME"] == route].sort_values("STOP_SEQUENCE")
+                d_stops = df_dest[df_dest["ROUTE_NAME"] == route].sort_values("STOP_SEQUENCE")
+                if not o_stops.empty and not d_stops.empty:
+                    board_stop = o_stops.iloc[0]["STOP_NAME"]
+                    alight_stop = d_stops.iloc[-1]["STOP_NAME"]
+                    rtype = o_stops.iloc[0]["ROUTE_TYPE"]
+                    direct_details.append(
+                        f"- {route} ({rtype}): Board at {board_stop} → Alight at {alight_stop}"
+                    )
+            context_parts.append(
+                f"DIRECT ROUTES (serve both {origin_nbhd} and {dest_display}):\n"
+                + "\n".join(direct_details)
+            )
+        else:
+            # No direct routes — suggest best options from each side
+            origin_rapid = df_origin[df_origin["ROUTE_TYPE"].isin(
+                ["Light Rail", "Heavy Rail (Subway)"]
+            )]["ROUTE_NAME"].unique()
+            dest_rapid   = df_dest[df_dest["ROUTE_TYPE"].isin(
+                ["Light Rail", "Heavy Rail (Subway)"]
+            )]["ROUTE_NAME"].unique()
+
+            context_parts.append(
+                f"NO DIRECT ROUTES between {origin_nbhd} and {dest_display}.\n"
+                f"Routes from {origin_nbhd}: {', '.join(list(origin_routes)[:8])}\n"
+                f"Routes serving {dest_display}: {', '.join(list(dest_routes)[:8])}\n"
+                f"Rapid transit in {origin_nbhd}: {', '.join(origin_rapid) or 'None'}\n"
+                f"Rapid transit at {dest_display}: {', '.join(dest_rapid) or 'None'}"
+            )
+
+        # Bluebikes context
+        if not df_bikes.empty:
+            bike_list = ", ".join(
+                f"{r['STATION_NAME']} ({r['TOTAL_DOCKS']} docks)"
+                for _, r in df_bikes.iterrows()
+            )
+            context_parts.append(f"BLUEBIKES near {dest_display}: {bike_list}")
+
+        context = "\n\n".join(context_parts)
+
+        # ── Synthesize commute instructions ───────────────────────────────────
+        prompt = f"""You are NeighbourWise AI, a Boston transit expert.
+
+The user wants to commute from {origin_nbhd} to {dest_display}.
+
+{context}
+
+Write a clear, practical commute guide with:
+1. **Best Route** — if direct routes exist, name the specific line/bus, 
+   the stop to board at, and the stop to get off at.
+   If no direct route, suggest the best transfer option using the routes listed.
+2. **Step-by-step** — numbered steps like:
+   1. Walk to [stop name]
+   2. Take [route name] toward [direction]
+   3. Get off at [stop name]
+   4. Walk X minutes to destination (estimate based on typical MBTA distances)
+3. **Bluebikes option** — if stations exist near destination, mention as 
+   a last-mile option.
+4. **Travel time estimate** — rough estimate based on route type 
+   (rapid transit ~3-5 min/stop, bus ~5-8 min/stop).
+
+Be specific with stop and route names. Keep it concise and practical.
+Do NOT say "I don't have real-time data" — just give the best route based 
+on the available information."""
+
+        answer = cortex_complete(prompt, conn, model=MODEL_GENERATE)
+        print(f"[TransitRoute] Done in {time.time()-t0:.1f}s")
+
+        return {
+            "type":       "data_query",
+            "answer":     answer,
+            "sql":        None,
+            "results":    [],
+            "rag_chunks": [],
+            "routing":    {
+                "intent":               "transit_route",
+                "intent_description":   f"Transit routing from {origin_nbhd} to {dest_display}",
+                "detected_domains":     ["MBTA"],
+                "detected_neighborhoods": [origin_nbhd, dest_nbhd],
+                "direct_routes":        list(direct_routes),
+            }
+        }
+
+    except Exception as e:
+        print(f"[TransitRoute] Error: {e} — falling back to data_query")
+        return handle_data_query(query, conn)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CHART HANDLER (unchanged)
@@ -891,6 +1113,8 @@ def route(query: str, conn, domain_filter: str = None) -> dict:
 
     if intent == "report":
         return handle_report(neighborhood or _extract_neighborhood_fast(query) or "", conn)
+    elif intent == "transit_route":
+        return handle_transit_route(query, conn)
     elif intent == "chart":
         return handle_chart(query, conn)
     elif intent == "image":
