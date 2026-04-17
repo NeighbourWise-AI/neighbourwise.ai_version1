@@ -1715,70 +1715,14 @@ with tab_overview:
 
         # ── HOUSING ───────────────────────────────────────────────────────────
         elif domain_filter == "Housing":
-            neighborhoods_data = domain_data.get("neighborhoods", [])
-            grade_dist         = domain_data.get("grade_distribution", {})
-
-            col1, col2 = st.columns([1.5, 1], gap="medium")
-            with col1:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Affordability Scores</div>', unsafe_allow_html=True)
-                st.caption("Higher score = more affordable")
-                if neighborhoods_data:
-                    df_h = pd.DataFrame(neighborhoods_data[:20])
-                    bars = alt.Chart(df_h).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4,
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("housing_score:Q", scale=alt.Scale(domain=[0, 100]),
-                                axis=alt.Axis(title="Housing Score")),
-                        color=alt.Color("housing_grade:N",
-                                        scale=alt.Scale(
-                                            domain=["AFFORDABLE","AVERAGE","PREMIUM","BELOW_AVERAGE"],
-                                            range=["#1E8449","#F59E0B","#C0392B","#7f8c8d"]),
-                                        legend=alt.Legend(title="Grade", orient="bottom")),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("housing_score:Q", format=".1f"),
-                                 "housing_grade:N",
-                                 alt.Tooltip("avg_monthly_rent:Q", title="Avg Rent $", format=",.0f"),
-                                 alt.Tooltip("avg_price_per_sqft:Q", title="$/sqft", format=".2f")],
-                    )
-                    st.altair_chart(bars.properties(height=500), use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-
-            with col2:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Grade Distribution</div>', unsafe_allow_html=True)
-                if grade_dist:
-                    df_g = pd.DataFrame(list(grade_dist.items()), columns=["Grade", "Count"])
-                    donut = alt.Chart(df_g).mark_arc(innerRadius=50, outerRadius=100).encode(
-                        theta=alt.Theta("Count:Q"),
-                        color=alt.Color("Grade:N",
-                                        scale=alt.Scale(
-                                            domain=["AFFORDABLE","AVERAGE","PREMIUM","BELOW_AVERAGE"],
-                                            range=["#1E8449","#F59E0B","#C0392B","#7f8c8d"]),
-                                        legend=alt.Legend(title=None)),
-                        tooltip=["Grade:N","Count:Q"],
-                    )
-                    st.altair_chart(donut.properties(height=260), use_container_width=True)
-                if neighborhoods_data:
-                    st.markdown('<div class="section-title" style="margin-top:12px;">Rent vs Score</div>',
-                                unsafe_allow_html=True)
-                    df_scatter = pd.DataFrame([
-                        n for n in neighborhoods_data
-                        if n.get("avg_monthly_rent") and n.get("housing_score")
-                    ])
-                    if not df_scatter.empty:
-                        scatter = alt.Chart(df_scatter).mark_circle(size=80).encode(
-                            x=alt.X("avg_monthly_rent:Q", axis=alt.Axis(title="Avg Monthly Rent ($)")),
-                            y=alt.Y("housing_score:Q", axis=alt.Axis(title="Affordability Score")),
-                            color=alt.Color("housing_grade:N", legend=None),
-                            tooltip=["neighborhood:N",
-                                     alt.Tooltip("housing_score:Q", format=".1f"),
-                                     alt.Tooltip("avg_monthly_rent:Q", format=",.0f", title="Rent $")],
-                        )
-                        st.altair_chart(scatter.properties(height=220), use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+            from housing_deep_dive_component import render_housing_deep_dive
+ 
+            domain_data_housing = load_domain("housing", hood_filter)
+ 
+            render_housing_deep_dive(
+                domain_data = domain_data_housing,
+                hood_filter = hood_filter,
+            )
 
         # ── TRANSIT ───────────────────────────────────────────────────────────
         elif domain_filter == "Transit":
@@ -2400,61 +2344,16 @@ with tab_overview:
 
         # ── GROCERY ───────────────────────────────────────────────────────────
         elif domain_filter == "Grocery":
-            scores   = domain_data.get("scores", [])
-            hotspots = domain_data.get("hotspots", [])
-            summary  = domain_data.get("summary", {})
+            from grocery_diversity_component import render_grocery_diversity
 
-            food_deserts = summary.get("food_desert_count", 0)
-            if food_deserts:
-                st.warning(f"⚠️ {food_deserts} neighborhoods classified as food deserts")
+            domain_data_grocery = load_domain("grocery", hood_filter)
+            map_data_grocery    = load_map()
 
-            col1, col2 = st.columns(2, gap="medium")
-            with col1:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Grocery Access Scores</div>', unsafe_allow_html=True)
-                if scores:
-                    df_g = pd.DataFrame(scores[:20])
-                    bars = alt.Chart(df_g).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4,
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("grocery_score:Q", scale=alt.Scale(domain=[0, 100]),
-                                axis=alt.Axis(title="Grocery Score")),
-                        color=alt.Color("grocery_grade:N",
-                                        scale=alt.Scale(
-                                            domain=["WELL_STOCKED","ADEQUATE","MODERATE","FOOD_DESERT"],
-                                            range=["#1E8449","#82E0AA","#F1C40F","#C0392B"]),
-                                        legend=alt.Legend(title="Grade", orient="bottom")),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("grocery_score:Q", format=".1f"),
-                                 "grocery_grade:N",
-                                 alt.Tooltip("total_stores:Q", title="Total Stores"),
-                                 alt.Tooltip("supermarkets:Q", title="Supermarkets"),
-                                 alt.Tooltip("stores_per_sqmile:Q", format=".2f", title="Stores/sqmi")],
-                    )
-                    st.altair_chart(bars.properties(height=480), use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-
-            with col2:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Store Cluster Hotspots</div>', unsafe_allow_html=True)
-                if hotspots:
-                    df_h = pd.DataFrame(hotspots[:20])
-                    bars = alt.Chart(df_h).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#f59e0b",
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("clustered_store_share_pct:Q",
-                                axis=alt.Axis(title="% Stores in Clusters")),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("store_clusters:Q", title="Clusters"),
-                                 alt.Tooltip("clustered_store_share_pct:Q", format=".1f", title="Clustered %"),
-                                 "access_tier:N"],
-                    )
-                    st.altair_chart(bars.properties(height=480), use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+            render_grocery_diversity(
+                domain_data  = domain_data_grocery,
+                map_data     = map_data_grocery,
+                hood_filter  = hood_filter,
+            )
 
         # ── HEALTHCARE ────────────────────────────────────────────────────────
         elif domain_filter == "Healthcare":
@@ -2772,7 +2671,7 @@ with tab_overview:
                         )
                         st.altair_chart(stacked.properties(height=420), use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
-                
+
         # ── SCHOOLS ───────────────────────────────────────────────────────────
         elif domain_filter == "Schools":
             neighborhoods_data = domain_data.get("neighborhoods", [])
@@ -3196,59 +3095,15 @@ with tab_overview:
 
         # ── RESTAURANTS ───────────────────────────────────────────────────────
         elif domain_filter == "Restaurants":
-            neighborhoods_data = domain_data.get("neighborhoods", [])
-            summary = domain_data.get("summary", {})
+            from restaurant_deep_dive_component import render_restaurant_deep_dive
 
-            st.markdown(
-                f'<div class="narrative-box">'
-                f'Total restaurants citywide: <b>{summary.get("total_restaurants_citywide", "—")}</b> · '
-                f'Avg rating: <b>{summary.get("avg_rating_citywide", "—")}</b>/5'
-                f'</div>', unsafe_allow_html=True,
+            domain_data_restaurants = load_domain("restaurants", hood_filter)
+
+            render_restaurant_deep_dive(
+                domain_data = domain_data_restaurants,
+                hood_filter = hood_filter,
+                api_base    = API_BASE_URL,
             )
-            col1, col2 = st.columns(2, gap="medium")
-            with col1:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Restaurant Scores</div>', unsafe_allow_html=True)
-                if neighborhoods_data:
-                    df_r = pd.DataFrame(neighborhoods_data[:20])
-                    bars = alt.Chart(df_r).mark_bar(
-                        cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#fb923c",
-                    ).encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=160)),
-                        x=alt.X("restaurant_score:Q", scale=alt.Scale(domain=[0, 100]),
-                                axis=alt.Axis(title="Restaurant Score")),
-                        tooltip=["neighborhood:N",
-                                 alt.Tooltip("restaurant_score:Q", format=".1f"),
-                                 "restaurant_grade:N",
-                                 alt.Tooltip("total_restaurants:Q", title="Total"),
-                                 alt.Tooltip("avg_rating:Q", format=".2f", title="Avg Rating"),
-                                 alt.Tooltip("cuisine_diversity:Q", title="Cuisine Types")],
-                    )
-                    st.altair_chart(bars.properties(height=480), use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-
-            with col2:
-                st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                st.markdown('<div class="section-title">Price Range Mix</div>', unsafe_allow_html=True)
-                if neighborhoods_data:
-                    df_r = pd.DataFrame(neighborhoods_data[:15])
-                    df_melt = df_r[["neighborhood","budget","mid_range","upscale"]].melt(
-                        id_vars="neighborhood", var_name="Price Range", value_name="Count"
-                    )
-                    stacked = alt.Chart(df_melt).mark_bar().encode(
-                        y=alt.Y("neighborhood:N", sort=None,
-                                axis=alt.Axis(title=None, labelFontSize=10, labelLimit=140)),
-                        x=alt.X("Count:Q", axis=alt.Axis(title="Restaurant Count")),
-                        color=alt.Color("Price Range:N",
-                                        scale=alt.Scale(
-                                            domain=["budget","mid_range","upscale"],
-                                            range=["#34d399","#fb923c","#f472b6"]),
-                                        legend=alt.Legend(title=None, orient="bottom")),
-                        tooltip=["neighborhood:N","Price Range:N","Count:Q"],
-                    )
-                    st.altair_chart(stacked.properties(height=480), use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
 
         # ── UNIVERSITIES ──────────────────────────────────────────────────────
         elif domain_filter == "Universities":

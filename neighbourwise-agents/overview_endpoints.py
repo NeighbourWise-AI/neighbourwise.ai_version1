@@ -590,7 +590,6 @@ async def domain_safety(neighborhood: Optional[str] = Query(None)):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DOMAIN: HOUSING
-# Verified: MRT_NEIGHBORHOOD_HOUSING
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/domain/housing")
@@ -748,77 +747,259 @@ async def domain_transit(neighborhood: Optional[str] = Query(None)):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DOMAIN: GROCERY
-# Verified: MRT_NEIGHBORHOOD_GROCERY_STORES, GA_GROCERY_HOTSPOT_CLUSTERS
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/domain/grocery")
 async def domain_grocery(neighborhood: Optional[str] = Query(None)):
-    """Grocery domain deep dive: store breakdown + food access + hotspot clusters."""
+    """
+    Grocery domain deep dive.
+    Primary source: GA_GROCERY_HOTSPOT_CLUSTERS + GA_GROCERY_NARRATIVE.
+    Supplemented by MRT_NEIGHBORHOOD_GROCERY_STORES for score/grade/density.
+    Geometry from MASTER_LOCATION for choropleth map.
+    """
     conn = _get_conn()
     hc = _hood(neighborhood)
+    ga_hc = _hood(neighborhood, col="ga.NEIGHBORHOOD_NAME")
+    gn_hc = _hood(neighborhood, col="gn.NEIGHBORHOOD_NAME")
     try:
+        df_scores_all = _run("""
+            SELECT
+                ga.NEIGHBORHOOD_NAME, ga.CITY, ga.TOTAL_STORES,
+                ga.ESSENTIAL_STORE_COUNT, ga.ESSENTIAL_STORE_PCT,
+                ga.SUPERMARKET_COUNT, ga.CONVENIENCE_STORE_COUNT,
+                ga.SPECIALTY_STORE_COUNT, ga.PHARMACY_COUNT,
+                ga.FARMERS_MARKET_COUNT, ga.N_STORE_CLUSTERS,
+                ga.CLUSTERED_STORE_SHARE_PCT, ga.ISOLATED_STORE_PCT,
+                ga.ACCESS_TIER, mrt.GROCERY_SCORE, mrt.GROCERY_GRADE,
+                mrt.STORES_PER_SQMILE, mrt.PCT_CONVENIENCE
+            FROM NEIGHBOURWISE_DOMAINS.GROCERY_ANALYSIS.GA_GROCERY_HOTSPOT_CLUSTERS ga
+            LEFT JOIN NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_GROCERY_STORES mrt
+                ON UPPER(ga.NEIGHBORHOOD_NAME) = UPPER(mrt.NEIGHBORHOOD_NAME)
+            WHERE UPPER(ga.NEIGHBORHOOD_NAME) != 'HARBOR ISLANDS'
+            ORDER BY ga.ESSENTIAL_STORE_COUNT DESC
+        """, conn)
+
         df_scores = _run(f"""
-            SELECT NEIGHBORHOOD_NAME, CITY, GROCERY_SCORE, GROCERY_GRADE,
-                   TOTAL_STORES, SUPERMARKET_COUNT, CONVENIENCE_STORE_COUNT,
-                   PHARMACY_COUNT, SPECIALTY_FOOD_COUNT, FARMERS_MARKET_COUNT,
-                   ESSENTIAL_STORE_COUNT, LARGE_FORMAT_COUNT,
-                   STORES_PER_SQMILE, PCT_ESSENTIAL, PCT_CONVENIENCE,
-                   ROW_DESCRIPTION
-            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_GROCERY_STORES
-            WHERE GROCERY_SCORE IS NOT NULL
-              {HARBOR_FILTER} {hc}
-            ORDER BY GROCERY_SCORE DESC
+            SELECT
+                ga.NEIGHBORHOOD_NAME, ga.CITY, ga.TOTAL_STORES,
+                ga.ESSENTIAL_STORE_COUNT, ga.ESSENTIAL_STORE_PCT,
+                ga.SUPERMARKET_COUNT, ga.CONVENIENCE_STORE_COUNT,
+                ga.SPECIALTY_STORE_COUNT, ga.PHARMACY_COUNT,
+                ga.FARMERS_MARKET_COUNT, ga.N_STORE_CLUSTERS,
+                ga.CLUSTERED_STORE_SHARE_PCT, ga.ISOLATED_STORE_PCT,
+                ga.ACCESS_TIER, mrt.GROCERY_SCORE, mrt.GROCERY_GRADE,
+                mrt.STORES_PER_SQMILE, mrt.PCT_CONVENIENCE
+            FROM NEIGHBOURWISE_DOMAINS.GROCERY_ANALYSIS.GA_GROCERY_HOTSPOT_CLUSTERS ga
+            LEFT JOIN NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_GROCERY_STORES mrt
+                ON UPPER(ga.NEIGHBORHOOD_NAME) = UPPER(mrt.NEIGHBORHOOD_NAME)
+            WHERE UPPER(ga.NEIGHBORHOOD_NAME) != 'HARBOR ISLANDS'
+              {ga_hc}
+            ORDER BY ga.ESSENTIAL_STORE_COUNT DESC
         """, conn)
 
-        df_hotspots = _run(f"""
-            SELECT NEIGHBORHOOD_NAME, TOTAL_STORES, N_STORE_CLUSTERS,
-                   CLUSTERED_STORE_SHARE_PCT, ISOLATED_STORE_PCT, ACCESS_TIER
-            FROM NEIGHBOURWISE_DOMAINS.GROCERY_ANALYSIS.GA_GROCERY_HOTSPOT_CLUSTERS
-            WHERE 1=1 {hc}
-            ORDER BY CLUSTERED_STORE_SHARE_PCT DESC
+        df_narrative = _run(f"""
+            SELECT NEIGHBORHOOD_NAME, CITY, ACCESS_TIER,
+                   FOOD_ACCESS_NARRATIVE, DATA_YEAR, RELIABILITY_FLAG
+            FROM NEIGHBOURWISE_DOMAINS.GROCERY_ANALYSIS.GA_GROCERY_NARRATIVE gn
+            WHERE UPPER(gn.NEIGHBORHOOD_NAME) != 'HARBOR ISLANDS'
+              {gn_hc}
+            ORDER BY gn.NEIGHBORHOOD_NAME
         """, conn)
 
-        food_desert_count = int((df_scores["GROCERY_GRADE"] == "FOOD_DESERT").sum()) if not df_scores.empty else 0
+        df_geo = _run("""
+            SELECT ml.NEIGHBORHOOD_NAME, ml.CENTROID_LAT, ml.CENTROID_LONG,
+                   ST_ASGEOJSON(ml.GEOMETRY)::VARCHAR AS GEOJSON
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MASTER_LOCATION ml
+            WHERE ml.HAS_GEOMETRY = TRUE
+              AND ml.CENTROID_LAT IS NOT NULL
+              AND UPPER(ml.NEIGHBORHOOD_NAME) != 'HARBOR ISLANDS'
+              AND ml.GRANULARITY IN ('NEIGHBORHOOD', 'CITY')
+        """, conn)
+
+        narrative_lookup = {}
+        for _, r in df_narrative.iterrows():
+            narrative_lookup[r["NEIGHBORHOOD_NAME"].upper()] = {
+                "narrative":   _s(r, "FOOD_ACCESS_NARRATIVE"),
+                "data_year":   _s(r, "DATA_YEAR"),
+                "reliability": _s(r, "RELIABILITY_FLAG"),
+            }
+
+        import json as _json
+        geo_lookup = {}
+        for _, r in df_geo.iterrows():
+            key = r["NEIGHBORHOOD_NAME"].upper()
+            try:
+                geo_lookup[key] = {
+                    "geojson": _json.loads(r["GEOJSON"]),
+                    "lat":     _f(r["CENTROID_LAT"]),
+                    "lon":     _f(r["CENTROID_LONG"]),
+                }
+            except Exception:
+                pass
+
+        low_access_count = int((df_scores["ACCESS_TIER"].isin(
+            ["LOW_ACCESS", "FOOD_DESERT", "DESERT"]
+        )).sum()) if not df_scores.empty else 0
+        tier_dist = df_scores["ACCESS_TIER"].value_counts().to_dict() if not df_scores.empty else {}
+
+        TIER_FILL = {
+            "HIGH_ACCESS": [30,  132, 73,  180],
+            "GOOD_ACCESS": [46,  134, 193, 160],
+            "FAIR_ACCESS": [212, 172, 13,  170],
+            "LOW_ACCESS":  [192, 57,  43,  180],
+        }
+        map_features = []
+        for _, r in df_scores_all.iterrows():
+            key = r["NEIGHBORHOOD_NAME"].upper()
+            geo = geo_lookup.get(key)
+            if not geo or not geo.get("geojson"):
+                continue
+            tier = str(r["ACCESS_TIER"]).upper()
+            narr = narrative_lookup.get(key, {})
+            map_features.append({
+                "type": "Feature",
+                "geometry": geo["geojson"],
+                "properties": {
+                    "neighborhood":      _title(r["NEIGHBORHOOD_NAME"]),
+                    "city":              _title(r["CITY"]),
+                    "access_tier":       tier,
+                    "access_tier_label": tier.replace("_", " ").title(),
+                    "total_stores":      _i(r["TOTAL_STORES"]),
+                    "essential_stores":  _i(r["ESSENTIAL_STORE_COUNT"]),
+                    "essential_pct":     _f(r["ESSENTIAL_STORE_PCT"]),
+                    "supermarkets":      _i(r["SUPERMARKET_COUNT"]),
+                    "n_clusters":        _i(r["N_STORE_CLUSTERS"]),
+                    "clustered_share":   _f(r["CLUSTERED_STORE_SHARE_PCT"]),
+                    "grocery_score":     _f(r.get("GROCERY_SCORE")),
+                    "latitude":          geo["lat"],
+                    "longitude":         geo["lon"],
+                    "fill_color":        TIER_FILL.get(tier, [100, 100, 100, 160]),
+                    "narrative":         narr.get("narrative", ""),
+                    "data_year":         narr.get("data_year", "2021"),
+                    "reliability":       narr.get("reliability", ""),
+                },
+            })
+
+        scores_list = []
+        for _, r in df_scores.iterrows():
+            key  = r["NEIGHBORHOOD_NAME"].upper()
+            narr = narrative_lookup.get(key, {})
+            geo  = geo_lookup.get(key, {})
+            scores_list.append({
+                "neighborhood":              _title(r["NEIGHBORHOOD_NAME"]),
+                "city":                      _title(r["CITY"]),
+                "access_tier":               str(r["ACCESS_TIER"]).upper(),
+                "grocery_score":             _f(r.get("GROCERY_SCORE")),
+                "grocery_grade":             _s(r, "GROCERY_GRADE"),
+                "total_stores":              _i(r["TOTAL_STORES"]),
+                "essential_stores":          _i(r["ESSENTIAL_STORE_COUNT"]),
+                "pct_essential":             _f(r["ESSENTIAL_STORE_PCT"]),
+                "supermarkets":              _i(r["SUPERMARKET_COUNT"]),
+                "convenience_store_count":   _i(r["CONVENIENCE_STORE_COUNT"]),
+                "specialty_food_count":      _i(r["SPECIALTY_STORE_COUNT"]),
+                "pharmacies":                _i(r["PHARMACY_COUNT"]),
+                "farmers_markets":           _i(r["FARMERS_MARKET_COUNT"]),
+                "n_clusters":                _i(r["N_STORE_CLUSTERS"]),
+                "clustered_store_share_pct": _f(r["CLUSTERED_STORE_SHARE_PCT"]),
+                "isolated_store_pct":        _f(r["ISOLATED_STORE_PCT"]),
+                "stores_per_sqmile":         _f(r.get("STORES_PER_SQMILE")),
+                "pct_convenience":           _f(r.get("PCT_CONVENIENCE")),
+                "lat":                       geo.get("lat"),
+                "lon":                       geo.get("lon"),
+                "description":               narr.get("narrative", ""),
+                "data_year":                 narr.get("data_year", "2021"),
+                "reliability":               narr.get("reliability", ""),
+            })
+
+        neighbors_list = []
+        if neighborhood and neighborhood.strip().upper() not in ("", "ALL"):
+            safe = neighborhood.replace("'", "''").upper()
+            try:
+                df_adj = _run(f"""
+                    SELECT ga.NEIGHBORHOOD_NAME, ga.CITY,
+                           ga.TOTAL_STORES, ga.ESSENTIAL_STORE_COUNT, ga.ACCESS_TIER
+                    FROM NEIGHBOURWISE_DOMAINS.MARTS.MASTER_LOCATION a
+                    JOIN NEIGHBOURWISE_DOMAINS.MARTS.MASTER_LOCATION b
+                        ON ST_INTERSECTS(a.GEOMETRY, b.GEOMETRY)
+                        AND a.LOCATION_ID != b.LOCATION_ID
+                    JOIN NEIGHBOURWISE_DOMAINS.GROCERY_ANALYSIS.GA_GROCERY_HOTSPOT_CLUSTERS ga
+                        ON UPPER(b.NEIGHBORHOOD_NAME) = UPPER(ga.NEIGHBORHOOD_NAME)
+                    WHERE UPPER(a.NEIGHBORHOOD_NAME) = '{safe}'
+                      AND (a.IS_BOSTON = TRUE OR a.IS_CAMBRIDGE = TRUE
+                           OR a.IS_GREATER_BOSTON = TRUE)
+                      AND UPPER(b.NEIGHBORHOOD_NAME) != '{safe}'
+                      AND UPPER(b.NEIGHBORHOOD_NAME) != 'HARBOR ISLANDS'
+                    ORDER BY ga.ESSENTIAL_STORE_COUNT DESC
+                    LIMIT 6
+                """, conn)
+                neighbors_list = [
+                    {
+                        "neighborhood":     _title(r["NEIGHBORHOOD_NAME"]),
+                        "city":             _title(r["CITY"]),
+                        "total_stores":     _i(r["TOTAL_STORES"]),
+                        "essential_stores": _i(r["ESSENTIAL_STORE_COUNT"]),
+                        "access_tier":      str(r["ACCESS_TIER"]).upper(),
+                    }
+                    for _, r in df_adj.iterrows()
+                ]
+            except Exception as e:
+                logger.warning(f"Neighbors query failed: {e}")
+
+        store_points = []
+        try:
+            df_stores = _run("""
+                SELECT STORE_NAME, STREET_ADDRESS, STORE_TYPE,
+                       CASE WHEN IS_ESSENTIAL_FOOD_SOURCE = TRUE THEN 1 ELSE 0 END AS IS_ESSENTIAL_INT,
+                       LAT, LONG, NEIGHBORHOOD_NAME, CITY
+                FROM (
+                    SELECT s.STORE_NAME, s.STREET_ADDRESS, s.STORE_TYPE,
+                           s.IS_ESSENTIAL_FOOD_SOURCE,
+                           s.LAT, s.LONG, s.NEIGHBORHOOD_NAME, s.CITY,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY UPPER(TRIM(s.STORE_NAME)),
+                                            UPPER(TRIM(s.STREET_ADDRESS)),
+                                            UPPER(s.NEIGHBORHOOD_NAME)
+                               ORDER BY s.STORE_NAME
+                           ) AS rn
+                    FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_GROCERY_STORES s
+                    WHERE s.HAS_VALID_LOCATION = TRUE
+                      AND s.LAT IS NOT NULL
+                      AND s.LONG IS NOT NULL
+                      AND UPPER(s.NEIGHBORHOOD_NAME) != 'HARBOR ISLANDS'
+                ) t
+                WHERE rn = 1
+                ORDER BY NEIGHBORHOOD_NAME, STORE_TYPE
+            """, conn)
+            store_points = [
+                {
+                    "name":         str(r.get("STORE_NAME", "") or ""),
+                    "address":      str(r.get("STREET_ADDRESS", "") or ""),
+                    "store_type":   str(r.get("STORE_TYPE", "") or ""),
+                    "essential":    bool(r.get("IS_ESSENTIAL_INT", 0) == 1),
+                    "large":        False,
+                    "lat":          float(r["LAT"]),
+                    "lon":          float(r["LONG"]),
+                    "neighborhood": _title(r.get("NEIGHBORHOOD_NAME", "")),
+                }
+                for _, r in df_stores.iterrows()
+                if pd.notna(r["LAT"]) and pd.notna(r["LONG"])
+            ]
+        except Exception as e:
+            logger.warning(f"Store points query failed: {e}", exc_info=True)
 
         return {
             "domain": "grocery",
             "filter": {"neighborhood": neighborhood or "ALL"},
             "summary": {
-                "food_desert_count": food_desert_count,
-                "grade_distribution": df_scores["GROCERY_GRADE"].value_counts().to_dict() if not df_scores.empty else {},
+                "low_access_count":   low_access_count,
+                "food_desert_count":  low_access_count,
+                "tier_distribution":  tier_dist,
+                "grade_distribution": tier_dist,
             },
-            "scores": [
-                {
-                    "neighborhood": _title(r["NEIGHBORHOOD_NAME"]),
-                    "city": _title(r["CITY"]),
-                    "grocery_score": _f(r["GROCERY_SCORE"]),
-                    "grocery_grade": r["GROCERY_GRADE"],
-                    "total_stores": _i(r["TOTAL_STORES"]),
-                    "supermarkets": _i(r["SUPERMARKET_COUNT"]),
-                    "convenience_stores": _i(r["CONVENIENCE_STORE_COUNT"]),
-                    "pharmacies": _i(r["PHARMACY_COUNT"]),
-                    "specialty_food": _i(r["SPECIALTY_FOOD_COUNT"]),
-                    "farmers_markets": _i(r["FARMERS_MARKET_COUNT"]),
-                    "essential_stores": _i(r["ESSENTIAL_STORE_COUNT"]),
-                    "large_format": _i(r["LARGE_FORMAT_COUNT"]),
-                    "stores_per_sqmile": _f(r["STORES_PER_SQMILE"]),
-                    "pct_essential": _f(r["PCT_ESSENTIAL"]),
-                    "pct_convenience": _f(r["PCT_CONVENIENCE"]),
-                    "description": _s(r, "ROW_DESCRIPTION"),
-                }
-                for _, r in df_scores.iterrows()
-            ],
-            "hotspots": [
-                {
-                    "neighborhood": _title(r["NEIGHBORHOOD_NAME"]),
-                    "total_stores": _i(r["TOTAL_STORES"]),
-                    "store_clusters": _i(r["N_STORE_CLUSTERS"]),
-                    "clustered_store_share_pct": _f(r["CLUSTERED_STORE_SHARE_PCT"]),
-                    "isolated_store_pct": _f(r["ISOLATED_STORE_PCT"]),
-                    "access_tier": _s(r, "ACCESS_TIER"),
-                }
-                for _, r in df_hotspots.iterrows()
-            ],
+            "map":         {"type": "FeatureCollection", "features": map_features},
+            "scores":      scores_list,
+            "neighbors":   neighbors_list,
+            "store_points": store_points,
         }
     finally:
         conn.close()
@@ -862,11 +1043,21 @@ async def domain_healthcare(neighborhood: Optional[str] = Query(None)):
 
         df_hotspots = _run(f"""
             SELECT NEIGHBORHOOD_NAME, CITY, TOTAL_FACILITIES,
+                   HOSPITAL_COUNT, CLINIC_COUNT,
                    N_HEALTHCARE_CLUSTERS, CLUSTERED_FACILITY_SHARE_PCT,
-                   ISOLATED_FACILITY_PCT
+                   ISOLATED_FACILITY_PCT, ACCESS_TIER
             FROM NEIGHBOURWISE_DOMAINS.HEALTHCARE_ANALYSIS.HA_HEALTHCARE_HOTSPOT_CLUSTERS
             WHERE 1=1 {HARBOR_FILTER} {hc}
             ORDER BY CLUSTERED_FACILITY_SHARE_PCT DESC
+        """, conn)
+
+        df_narratives = _run(f"""
+            SELECT NEIGHBORHOOD_NAME, ACCESS_TIER, TOTAL_FACILITIES,
+                   N_HEALTHCARE_CLUSTERS, CLUSTERED_FACILITY_SHARE_PCT,
+                   HEALTHCARE_NARRATIVE, RELIABILITY_FLAG
+            FROM NEIGHBOURWISE_DOMAINS.HEALTHCARE_ANALYSIS.HA_HEALTHCARE_NARRATIVE
+            WHERE 1=1 {HARBOR_FILTER} {hc}
+            ORDER BY TOTAL_FACILITIES DESC
         """, conn)
 
         return {
@@ -922,16 +1113,54 @@ async def domain_healthcare(neighborhood: Optional[str] = Query(None)):
                     "neighborhood": _title(r["NEIGHBORHOOD_NAME"]),
                     "city": _title(r["CITY"]),
                     "total_facilities": _i(r["TOTAL_FACILITIES"]),
+                    "hospitals": _i(r["HOSPITAL_COUNT"]),
+                    "clinics": _i(r["CLINIC_COUNT"]),
                     "healthcare_clusters": _i(r["N_HEALTHCARE_CLUSTERS"]),
                     "clustered_facility_share_pct": _f(r["CLUSTERED_FACILITY_SHARE_PCT"]),
                     "isolated_facility_pct": _f(r["ISOLATED_FACILITY_PCT"]),
+                    "access_tier": r["ACCESS_TIER"],
                 }
                 for _, r in df_hotspots.iterrows()
+            ],
+            "narratives": [
+                {
+                    "neighborhood": _title(r["NEIGHBORHOOD_NAME"]),
+                    "access_tier": r["ACCESS_TIER"],
+                    "total_facilities": _i(r["TOTAL_FACILITIES"]),
+                    "healthcare_clusters": _i(r["N_HEALTHCARE_CLUSTERS"]),
+                    "narrative": r["HEALTHCARE_NARRATIVE"],
+                    "reliability": r["RELIABILITY_FLAG"],
+                }
+                for _, r in df_narratives.iterrows()
             ],
         }
     finally:
         conn.close()
 
+# ─────────────────────────────────────────────────────────────
+# HEALTHCARE: Facility Cluster Points
+# ─────────────────────────────────────────────────────────────
+@router.get("/healthcare/cluster-points")
+async def get_healthcare_cluster_points(neighborhood: Optional[str] = Query(None)):
+    conn = _get_conn()
+    hc = _hood(neighborhood)
+    try:
+        df = _run(f"""
+            SELECT NEIGHBORHOOD_NAME, FACILITY_NAME, FACILITY_TYPE_GROUP,
+                   LAT, LONG, CLUSTER_ID, IS_NOISE, IS_HOSPITAL, IS_CLINIC
+            FROM NEIGHBOURWISE_DOMAINS.HEALTHCARE_ANALYSIS.HA_HEALTHCARE_CLUSTER_POINTS
+            WHERE LAT IS NOT NULL AND LONG IS NOT NULL
+              {hc}
+        """, conn)
+        return {"points": [
+            {"neighborhood": _title(r["NEIGHBORHOOD_NAME"]), "facility_name": r["FACILITY_NAME"],
+             "facility_type": r["FACILITY_TYPE_GROUP"], "lat": float(r["LAT"]), "lng": float(r["LONG"]),
+             "cluster_id": int(r["CLUSTER_ID"]), "is_noise": bool(r["IS_NOISE"]),
+             "is_hospital": bool(r["IS_HOSPITAL"]), "is_clinic": bool(r["IS_CLINIC"])}
+            for _, r in df.iterrows()
+        ]}
+    finally:
+        conn.close()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DOMAIN: SCHOOLS
@@ -1000,13 +1229,21 @@ async def domain_schools(neighborhood: Optional[str] = Query(None)):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DOMAIN: RESTAURANTS
-# Verified: MRT_NEIGHBORHOOD_RESTAURANTS
+# DOMAIN: RESTAURANTS  ← PATCHED: added all cuisine + rating tier columns
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/domain/restaurants")
 async def domain_restaurants(neighborhood: Optional[str] = Query(None)):
-    """Restaurants domain deep dive: density + cuisine diversity + quality."""
+    """
+    Restaurants domain deep dive: density + cuisine diversity + quality.
+
+    PATCH (April 17 2026):
+      Added to SELECT:  BREAKFAST_COUNT, SANDWICHES_DELI_COUNT, AMERICAN_COUNT,
+                        BAR_COUNT, OTHER_COUNT
+      Added to return:  breakfast, sandwiches, american, bar, other
+                        (excellent/good/average/poor were in SELECT but missing
+                        from return dict — now included)
+    """
     conn = _get_conn()
     hc = _hood(neighborhood)
     try:
@@ -1016,8 +1253,10 @@ async def domain_restaurants(neighborhood: Optional[str] = Query(None)):
                    AVG_RATING, TOTAL_REVIEWS, PCT_HIGH_QUALITY,
                    BUDGET_COUNT, MID_RANGE_COUNT, UPSCALE_COUNT,
                    EXCELLENT_COUNT, GOOD_COUNT, AVERAGE_COUNT, POOR_COUNT,
-                   CUISINE_DIVERSITY, ETHNIC_COUNT, PIZZA_COUNT, CAFE_BAKERY_COUNT,
-                   FAST_FOOD_COUNT, HEALTHY_COUNT, AMERICAN_COUNT,
+                   CUISINE_DIVERSITY,
+                   ETHNIC_COUNT, PIZZA_COUNT, CAFE_BAKERY_COUNT,
+                   FAST_FOOD_COUNT, BREAKFAST_COUNT, SANDWICHES_DELI_COUNT,
+                   HEALTHY_COUNT, AMERICAN_COUNT, BAR_COUNT, OTHER_COUNT,
                    DELIVERY_COUNT, PICKUP_COUNT, PCT_DELIVERY,
                    RESTAURANT_DESCRIPTION
             FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_NEIGHBORHOOD_RESTAURANTS
@@ -1030,32 +1269,141 @@ async def domain_restaurants(neighborhood: Optional[str] = Query(None)):
             "domain": "restaurants",
             "filter": {"neighborhood": neighborhood or "ALL"},
             "summary": {
-                "grade_distribution": df["RESTAURANT_GRADE"].value_counts().to_dict() if not df.empty else {},
+                "grade_distribution":        df["RESTAURANT_GRADE"].value_counts().to_dict() if not df.empty else {},
                 "total_restaurants_citywide": _i(df["TOTAL_RESTAURANTS"].sum()) if not df.empty else None,
-                "avg_rating_citywide": round(float(df["AVG_RATING"].mean()), 2) if not df.empty else None,
+                "avg_rating_citywide":        round(float(df["AVG_RATING"].mean()), 2) if not df.empty else None,
             },
             "neighborhoods": [
                 {
-                    "neighborhood": _title(r["NEIGHBORHOOD_NAME"]),
-                    "city": _title(r["CITY"]),
-                    "restaurant_score": _f(r["RESTAURANT_SCORE"]),
-                    "restaurant_grade": r["RESTAURANT_GRADE"],
-                    "total_restaurants": _i(r["TOTAL_RESTAURANTS"]),
+                    # ── Identity ──────────────────────────────────────────────
+                    "neighborhood":         _title(r["NEIGHBORHOOD_NAME"]),
+                    "city":                 _title(r["CITY"]),
+                    # ── Score / grade ─────────────────────────────────────────
+                    "restaurant_score":     _f(r["RESTAURANT_SCORE"]),
+                    "restaurant_grade":     r["RESTAURANT_GRADE"],
+                    # ── Counts ────────────────────────────────────────────────
+                    "total_restaurants":    _i(r["TOTAL_RESTAURANTS"]),
                     "restaurants_per_sqmile": _f(r["RESTAURANTS_PER_SQMILE"]),
-                    "avg_rating": _f(r["AVG_RATING"]),
-                    "total_reviews": _i(r["TOTAL_REVIEWS"]),
-                    "pct_high_quality": _f(r["PCT_HIGH_QUALITY"]),
-                    "budget": _i(r["BUDGET_COUNT"]),
-                    "mid_range": _i(r["MID_RANGE_COUNT"]),
-                    "upscale": _i(r["UPSCALE_COUNT"]),
-                    "cuisine_diversity": _i(r["CUISINE_DIVERSITY"]),
-                    "ethnic_count": _i(r["ETHNIC_COUNT"]),
-                    "fast_food": _i(r["FAST_FOOD_COUNT"]),
-                    "cafes_bakeries": _i(r["CAFE_BAKERY_COUNT"]),
-                    "healthy": _i(r["HEALTHY_COUNT"]),
-                    "delivery_count": _i(r["DELIVERY_COUNT"]),
-                    "pct_delivery": _f(r["PCT_DELIVERY"]),
-                    "description": _s(r, "RESTAURANT_DESCRIPTION"),
+                    # ── Rating stats ──────────────────────────────────────────
+                    "avg_rating":           _f(r["AVG_RATING"]),
+                    "total_reviews":        _i(r["TOTAL_REVIEWS"]),
+                    "pct_high_quality":     _f(r["PCT_HIGH_QUALITY"]),
+                    # ── Price tiers ───────────────────────────────────────────
+                    "budget":               _i(r["BUDGET_COUNT"]),
+                    "mid_range":            _i(r["MID_RANGE_COUNT"]),
+                    "upscale":              _i(r["UPSCALE_COUNT"]),
+                    # ── Rating tiers (now included in return dict) ────────────
+                    "excellent":            _i(r["EXCELLENT_COUNT"]),
+                    "good":                 _i(r["GOOD_COUNT"]),
+                    "average":              _i(r["AVERAGE_COUNT"]),
+                    "poor":                 _i(r["POOR_COUNT"]),
+                    # ── Cuisine diversity ─────────────────────────────────────
+                    "cuisine_diversity":    _i(r["CUISINE_DIVERSITY"]),
+                    # ── Cuisine counts (full set) ─────────────────────────────
+                    "ethnic_count":         _i(r["ETHNIC_COUNT"]),
+                    "pizza_count":          _i(r["PIZZA_COUNT"]),
+                    "cafe_bakery_count":    _i(r["CAFE_BAKERY_COUNT"]),
+                    "fast_food_count":      _i(r["FAST_FOOD_COUNT"]),
+                    "breakfast_count":      _i(r["BREAKFAST_COUNT"]),       # NEW
+                    "sandwiches_deli_count":_i(r["SANDWICHES_DELI_COUNT"]), # NEW
+                    "healthy_count":        _i(r["HEALTHY_COUNT"]),
+                    "american_count":       _i(r["AMERICAN_COUNT"]),        # NEW
+                    "bar_count":            _i(r["BAR_COUNT"]),             # NEW
+                    "other_count":          _i(r["OTHER_COUNT"]),           # NEW
+                    # ── Delivery ─────────────────────────────────────────────
+                    "delivery_count":       _i(r["DELIVERY_COUNT"]),
+                    "pct_delivery":         _f(r["PCT_DELIVERY"]),
+                    # ── Description ──────────────────────────────────────────
+                    "description":          _s(r, "RESTAURANT_DESCRIPTION"),
+                }
+                for _, r in df.iterrows()
+            ]
+        }
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DOMAIN: RESTAURANTS — INDIVIDUAL RECORDS  ← NEW ENDPOINT
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/domain/restaurants/individual")
+async def domain_restaurants_individual(
+    neighborhood: Optional[str] = Query(None),
+    limit: int = Query(30, ge=5, le=100),
+):
+    """
+    Individual restaurant records for a specific neighborhood, ranked by a
+    popularity score (RATING * LN(REVIEW_COUNT + 1)).
+
+    Returns top `limit` restaurants (default 30, max 100).
+    Requires neighborhood parameter — returns empty list if omitted.
+
+    Source table: MARTS.MRT_BOSTON_RESTAURANTS
+    """
+    if not neighborhood or neighborhood.strip().upper() in ("", "ALL"):
+        return {"neighborhood": None, "count": 0, "restaurants": []}
+
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        df = _run(f"""
+            SELECT
+                RESTAURANT_ID,
+                RESTAURANT_NAME,
+                DISPLAY_PHONE,
+                CATEGORIES_TITLES,
+                PRICE_TIER,
+                PRICE_LABEL,
+                RATING,
+                REVIEW_COUNT,
+                RATING_TIER,
+                REVIEW_VOLUME_TIER,
+                HAS_DELIVERY,
+                HAS_PICKUP,
+                CUISINE_CATEGORY,
+                ADDRESS1,
+                CITY,
+                ZIP_CODE,
+                LATITUDE,
+                LONGITUDE,
+                NEIGHBORHOOD_NAME,
+                NEIGHBORHOOD_CITY
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_RESTAURANTS
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
+              AND HAS_VALID_LOCATION = TRUE
+              AND RATING IS NOT NULL
+              AND REVIEW_COUNT IS NOT NULL
+              AND REVIEW_COUNT > 0
+            ORDER BY (RATING * LN(REVIEW_COUNT + 1)) DESC
+            LIMIT {limit}
+        """, conn)
+
+        if df.empty:
+            return {"neighborhood": _title(neighborhood), "count": 0, "restaurants": []}
+
+        return {
+            "neighborhood": _title(neighborhood),
+            "count": len(df),
+            "restaurants": [
+                {
+                    "id":           _s(r, "RESTAURANT_ID"),
+                    "name":         _s(r, "RESTAURANT_NAME"),
+                    "phone":        _s(r, "DISPLAY_PHONE"),
+                    "categories":   _s(r, "CATEGORIES_TITLES"),
+                    "price_tier":   _i(r["PRICE_TIER"]),
+                    "price_label":  _s(r, "PRICE_LABEL"),
+                    "rating":       _f(r["RATING"]),
+                    "reviews":      _i(r["REVIEW_COUNT"]),
+                    "rating_tier":  _s(r, "RATING_TIER"),
+                    "has_delivery": str(r.get("HAS_DELIVERY", "")).lower() in ("true", "1", "yes"),
+                    "has_pickup":   str(r.get("HAS_PICKUP",   "")).lower() in ("true", "1", "yes"),
+                    "cuisine":      _s(r, "CUISINE_CATEGORY"),
+                    "address":      _s(r, "ADDRESS1"),
+                    "city":         _s(r, "CITY"),
+                    "zip":          _s(r, "ZIP_CODE"),
+                    "lat":          _f(r["LATITUDE"]),
+                    "lng":          _f(r["LONGITUDE"]),
                 }
                 for _, r in df.iterrows()
             ]
