@@ -378,6 +378,7 @@ async def get_crime_summary():
     """High-level city-wide crime trend summary for the home page widget."""
     conn = _get_conn()
     try:
+
         df_trend = _run(f"""
             SELECT RECENT_TREND,
                    COUNT(*) AS NEIGHBORHOOD_COUNT,
@@ -409,26 +410,61 @@ async def get_crime_summary():
             LIMIT 5
         """, conn)
 
+        # Monthly crime trend by city group — last 12 months
+        try:
+            df_monthly = _run("""
+                SELECT
+                    CASE
+                        WHEN ml.IS_BOSTON = TRUE        THEN 'Boston'
+                        WHEN ml.IS_CAMBRIDGE = TRUE      THEN 'Cambridge'
+                        WHEN ml.IS_GREATER_BOSTON = TRUE THEN 'Greater Boston'
+                    END AS city,
+                    DATE_TRUNC('month', bc.OCCURRED_ON_DATE) AS month,
+                    COUNT(*) AS crime_count
+                FROM NEIGHBOURWISE_DOMAINS.MARTS.MRT_BOSTON_CRIME bc
+                JOIN NEIGHBOURWISE_DOMAINS.MARTS.MASTER_LOCATION ml
+                    ON UPPER(bc.NEIGHBORHOOD_NAME) = UPPER(ml.NEIGHBORHOOD_NAME)
+                WHERE bc.OCCURRED_ON_DATE >= DATEADD('month', -12, CURRENT_DATE())
+                  AND bc.OCCURRED_ON_DATE < DATE_TRUNC('month', CURRENT_DATE())
+                  AND bc.VALID_LOCATION = TRUE
+                  AND bc.NEIGHBORHOOD_NAME IS NOT NULL
+                GROUP BY 1, 2
+                ORDER BY 2, 1
+            """, conn)
+            monthly_by_city = [
+                {
+                    "city":        r["CITY"],
+                    "month":       str(r["MONTH"])[:10],
+                    "crime_count": _i(r["CRIME_COUNT"]),
+                }
+                for _, r in df_monthly.iterrows()
+                if r["CITY"] is not None
+            ] if not df_monthly.empty else []
+        except Exception as e:
+            logger.warning(f"Monthly by city query failed: {e}")
+            monthly_by_city = []
+
         return {
             "trend_summary": {
                 r["RECENT_TREND"]: {
-                    "neighborhood_count": _i(r["NEIGHBORHOOD_COUNT"]),
+                    "neighborhood_count":    _i(r["NEIGHBORHOOD_COUNT"]),
                     "avg_monthly_incidents": _f(r["AVG_MONTHLY_INCIDENTS"]),
                     "avg_forecast_next_month": _f(r["AVG_FORECAST_NEXT_MONTH"]),
                 }
                 for _, r in df_trend.iterrows()
             },
             "highest_volume_next_month": [
-                {"neighborhood": _title(r["NEIGHBORHOOD_NAME"]),
+                {"neighborhood":    _title(r["NEIGHBORHOOD_NAME"]),
                  "forecasted_count": _f(r["FORECASTED_COUNT"]),
-                 "trend": r["RECENT_TREND"]}
+                 "trend":           r["RECENT_TREND"]}
                 for _, r in df_top.iterrows()
             ],
             "most_improved": [
-                {"neighborhood": _title(r["NEIGHBORHOOD_NAME"]),
+                {"neighborhood":        _title(r["NEIGHBORHOOD_NAME"]),
                  "avg_monthly_incidents": _f(r["RECENT_AVG_MONTHLY"])}
                 for _, r in df_improving.iterrows()
             ],
+            "monthly_by_city": monthly_by_city,
         }
     finally:
         conn.close()
@@ -1191,6 +1227,94 @@ async def get_domain_matrix(
                 }
                 for _, r in df.iterrows()
             ]
+        }
+    finally:
+        conn.close()
+    
+@router.get("/safety/hotspot-map/{neighborhood}")
+async def get_hotspot_map(neighborhood: str):
+    """
+    Returns pre-computed DBSCAN cluster points for a neighborhood
+    from CA_CRIME_CLUSTER_POINTS.
+    """
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        df = _run(f"""
+            SELECT LAT, LONG, CLUSTER_ID, IS_NOISE, CRIME_DATE, CRIME_DESCRIPTION
+            FROM NEIGHBOURWISE_DOMAINS.CRIME_ANALYSIS.CA_CRIME_CLUSTER_POINTS
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
+              AND LAT IS NOT NULL
+              AND LONG IS NOT NULL
+        """, conn)
+
+        if df.empty:
+            return {"neighborhood": _title(neighborhood), "points": [], "cluster_count": 0}
+
+        total       = len(df)
+        hotspot_pts = df[df["IS_NOISE"] == False]
+        noise_pts   = df[df["IS_NOISE"] == True]
+        cluster_ids = [c for c in df["CLUSTER_ID"].unique() if c != -1]
+
+        points = [
+            {
+                "lat":         float(r["LAT"]),
+                "lng":         float(r["LONG"]),
+                "cluster_id":  int(r["CLUSTER_ID"]),
+                "is_noise":    bool(r["IS_NOISE"]),
+                "date":        str(r["CRIME_DATE"]) if r["CRIME_DATE"] else "—",
+                "description": str(r["CRIME_DESCRIPTION"]) if r["CRIME_DESCRIPTION"] else "—",
+            }
+            for _, r in df.iterrows()
+        ]
+
+        return {
+            "neighborhood":   _title(neighborhood),
+            "total_points":   total,
+            "hotspot_count":  len(hotspot_pts),
+            "noise_count":    len(noise_pts),
+            "cluster_count":  len(cluster_ids),
+            "hotspot_pct":    round(len(hotspot_pts) / total * 100, 1) if total > 0 else 0.0,
+            "points":         points,
+        }
+    finally:
+        conn.close()
+
+@router.get("/safety/neighborhood-boundary/{neighborhood}")
+async def get_neighborhood_boundary(neighborhood: str):
+    """Returns boundary polygon coordinates for a neighborhood as lat/lng points."""
+    conn = _get_conn()
+    safe = neighborhood.replace("'", "''").upper()
+    try:
+        import json
+
+        df = _run(f"""
+            SELECT ST_ASGEOJSON(GEOMETRY)::VARCHAR AS GEOJSON
+            FROM NEIGHBOURWISE_DOMAINS.MARTS.MASTER_LOCATION
+            WHERE UPPER(NEIGHBORHOOD_NAME) = '{safe}'
+              AND HAS_GEOMETRY = TRUE
+            LIMIT 1
+        """, conn)
+
+        if df.empty:
+            return {"neighborhood": _title(neighborhood), "coordinates": []}
+
+        geojson = json.loads(df.iloc[0]["GEOJSON"])
+        coords_raw = geojson.get("coordinates", [])
+
+        # Handle both Polygon and MultiPolygon
+        points = []
+        if geojson["type"] == "Polygon":
+            for lng, lat in coords_raw[0]:
+                points.append({"lat": lat, "lng": lng})
+        elif geojson["type"] == "MultiPolygon":
+            for polygon in coords_raw:
+                for lng, lat in polygon[0]:
+                    points.append({"lat": lat, "lng": lng})
+
+        return {
+            "neighborhood": _title(neighborhood),
+            "coordinates":  points,
         }
     finally:
         conn.close()
